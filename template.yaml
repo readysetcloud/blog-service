@@ -1,0 +1,308 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Blog service powering Ready, Set, Cloud cross-posting and analytics
+
+Metadata:
+  esbuild-properties: &esbuild-properties
+    Format: esm
+    Minify: true
+    OutExtension:
+      - .js=.mjs
+    Target: es2020
+    Sourcemap: false
+    EntryPoints:
+      - index.mjs
+    Banner:
+      - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
+    External:
+      - '@aws-sdk/*'
+
+Parameters:
+  AmplifyAppId:
+    Type: String
+    Default: d31uo0a8ezw8ek
+  GitHubOwner:
+    Type: String
+    Default: readysetcloud
+  GitHubRepo:
+    Type: String
+    Default: ready-set-cloud
+  Environment:
+    Type: String
+    AllowedValues: [ sandbox, stage, production ]
+    Default: sandbox
+  AdminEmail:
+    Type: String
+    Default: allenheltondev@gmail.com
+  HashnodeBlogUrl:
+    Type: String
+    Default: https://allenheltondev.hashnode.dev
+
+Conditions:
+  DeployProductionResources:
+    !Equals [!Ref Environment, 'production']
+  DeployStageResources:
+    Fn::Not:
+      - !Equals [!Ref Environment, 'production']
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    CodeUri: functions
+    Architectures:
+      - arm64
+    Tracing: Active
+    Timeout: 15
+    MemorySize: 1024
+    Environment:
+      Variables:
+        AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+        SECRET_ID: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+
+Resources:
+  BlogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  ParseBlogFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - parse-blog.mjs
+    Properties:
+      Handler: parse-blog.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+  IdentifyNewBlogFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - identify-new-blog.mjs
+    Properties:
+      Handler: identify-new-blog.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Environment:
+        Variables:
+          OWNER: !Ref GitHubOwner
+          REPO: !Ref GitHubRepo
+          COMMIT_TIME_TOLERANCE_MINUTES: 10
+      Events:
+        AmplifyBuildSuccessful:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.amplify
+              detail-type:
+                - Amplify Deployment Status Change
+              detail:
+                appId:
+                  - !Ref AmplifyAppId
+                jobStatus:
+                  - SUCCEED
+
+  GetViewCountFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-view-count.mjs
+    Properties:
+      Handler: get-view-count.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+
+  CompareViewCountsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - compare-view-counts.mjs
+    Properties:
+      Handler: compare-view-counts.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+
+  GetTopBlogsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-top-blogs.mjs
+    Properties:
+      Handler: get-top-blogs.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+
+  GetBlogContentFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-blog-content.mjs
+    Properties:
+      Handler: get-blog-content.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+      Environment:
+        Variables:
+          OWNER: !Ref GitHubOwner
+          REPO: !Ref GitHubRepo
+
+  CrossPostStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/cross-post.asl.json
+      DefinitionSubstitutions:
+        DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
+        TableName: !Ref BlogTable
+        DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
+        DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        ParseBlog: !GetAtt ParseBlogFunction.Arn
+        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        AdminEmail: !Ref AdminEmail
+        HashnodeBlogUrl: !Ref HashnodeBlogUrl
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+        ExecutionUrl: !Sub https://${AWS::Region}.console.${AWS::Partition}.amazon.com/states/home?region=${AWS::Region}#/v2/executions/details
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt BlogTable.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub ${BlogTable.Arn}/index/GSI1
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt ParseBlogFunction.Arn
+                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Events:
+        EventInvocation:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              detail-type:
+                - Process New Blog
+
+  BlogViewCountStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/blog-view-count.asl.json
+      DefinitionSubstitutions:
+        TableName: !Ref BlogTable
+        DynamoDbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        GetViewCount: !GetAtt GetViewCountFunction.Arn
+        CompareViewCounts: !GetAtt CompareViewCountsFunction.Arn
+        GetTopBlogs: !GetAtt GetTopBlogsFunction.Arn
+        DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+        AdminEmail: !Ref AdminEmail
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:PutItem
+              Resource: !GetAtt BlogTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !Sub ${BlogTable.Arn}/index/GSI1
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt GetViewCountFunction.Arn
+                - !GetAtt CompareViewCountsFunction.Arn
+                - !GetAtt GetTopBlogsFunction.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Events:
+        Trigger:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 11 ? * MON *)"

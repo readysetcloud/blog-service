@@ -1,0 +1,272 @@
+{
+  "Comment": "Gets the view counts of all blogs since the last run and sends an email",
+  "StartAt": "Get All Blogs",
+  "States": {
+    "Get All Blogs": {
+      "Type": "Task",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "IndexName": "GSI1",
+        "KeyConditionExpression": "#GSI1PK = :GSI1PK",
+        "ExpressionAttributeNames": {
+          "#GSI1PK": "GSI1PK"
+        },
+        "ExpressionAttributeValues": {
+          ":GSI1PK": {
+            "S": "article"
+          }
+        }
+      },
+      "Resource": "${DynamoDbQuery}",
+      "Next": "Get Views",
+      "OutputPath": "$.Items"
+    },
+    "Get Views": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "Get Blog Counts",
+        "States": {
+          "Get Blog Counts": {
+            "Type": "Task",
+            "Resource": "${LambdaInvoke}",
+            "Parameters": {
+              "FunctionName": "${GetViewCount}",
+              "Payload": {
+                "blog.$": "$.pk.S",
+                "ids.$": "$.ids",
+                "unmarshallIds": true
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              },
+              {
+                "ErrorEquals": [
+                  "RateLimitExceeded"
+                ],
+                "BackoffRate": 2,
+                "IntervalSeconds": 30,
+                "MaxAttempts": 6
+              }
+            ],
+            "ResultPath": "$.views",
+            "Next": "Get Last Week's View Count"
+          },
+          "Get Last Week's View Count": {
+            "Type": "Task",
+            "Next": "Has Last Week View Count?",
+            "Parameters": {
+              "TableName": "${TableName}",
+              "KeyConditionExpression": "#pk = :pk and begins_with(#sk, :sk)",
+              "ExpressionAttributeNames": {
+                "#pk": "pk",
+                "#sk": "sk"
+              },
+              "ExpressionAttributeValues": {
+                ":pk": {
+                  "S.$": "$.pk.S"
+                },
+                ":sk": {
+                  "S": "viewCount"
+                }
+              },
+              "ScanIndexForward": false,
+              "Limit": 1
+            },
+            "Resource": "${DynamoDbQuery}",
+            "ResultPath": "$.lastViewCount"
+          },
+          "Has Last Week View Count?": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.lastViewCount.Count",
+                "NumericGreaterThan": 0,
+                "Next": "Get View Count Week Over Week"
+              }
+            ],
+            "Default": "Get View Count For This Week Only"
+          },
+          "Get View Count For This Week Only": {
+            "Type": "Task",
+            "Resource": "${LambdaInvoke}",
+            "Parameters": {
+              "FunctionName": "${CompareViewCounts}",
+              "Payload": {
+                "views.$": "$.views.Payload",
+                "blog.$": "$.pk.S"
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Create Weekly View Count",
+            "ResultPath": "$.weeklyCounts"
+          },
+          "Get View Count Week Over Week": {
+            "Type": "Task",
+            "Resource": "${LambdaInvoke}",
+            "Parameters": {
+              "FunctionName": "${CompareViewCounts}",
+              "Payload": {
+                "views.$": "$.views.Payload",
+                "previous.$": "$.lastViewCount.Items[0].allTime",
+                "blog.$": "$.pk.S"
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Create Weekly View Count",
+            "ResultPath": "$.weeklyCounts"
+          },
+          "Create Weekly View Count": {
+            "Type": "Task",
+            "Resource": "${DynamodbPutItem}",
+            "Parameters": {
+              "TableName": "${TableName}",
+              "Item": {
+                "pk": {
+                  "S.$": "$.pk.S"
+                },
+                "sk": {
+                  "S.$": "States.Format('viewCount-{}', States.ArrayGetItem(States.StringSplit($$.Execution.StartTime, 'T'), 0))"
+                },
+                "weekly": {
+                  "M": {
+                    "blog": {
+                      "N.$": "States.Format('{}', $.weeklyCounts.Payload.blog)"
+                    },
+                    "medium": {
+                      "N.$": "States.Format('{}', $.weeklyCounts.Payload.medium)"
+                    },
+                    "dev": {
+                      "N.$": "States.Format('{}', $.weeklyCounts.Payload.dev)"
+                    },
+                    "hashnode": {
+                      "N.$": "States.Format('{}', $.weeklyCounts.Payload.hashnode)"
+                    },
+                    "total": {
+                      "N.$": "States.Format('{}', $.weeklyCounts.Payload.total)"
+                    }
+                  }
+                },
+                "allTime": {
+                  "M": {
+                    "blog": {
+                      "N.$": "States.Format('{}', $.views.Payload.blog)"
+                    },
+                    "medium": {
+                      "N.$": "States.Format('{}', $.views.Payload.medium)"
+                    },
+                    "dev": {
+                      "N.$": "States.Format('{}', $.views.Payload.dev)"
+                    },
+                    "hashnode": {
+                      "N.$": "States.Format('{}', $.views.Payload.hashnode)"
+                    },
+                    "total": {
+                      "N.$": "States.Format('{}', $.views.Payload.total)"
+                    }
+                  }
+                }
+              }
+            },
+            "ResultPath": null,
+            "Next": "Wait"
+          },
+          "Wait": {
+            "Type": "Wait",
+            "Seconds": 10,
+            "Next": "Throw Away State"
+          },
+          "Throw Away State": {
+            "Type": "Pass",
+            "End": true,
+            "Result": {
+              "success": true
+            }
+          }
+        }
+      },
+      "Next": "Get Summary Email",
+      "ResultPath": null,
+      "MaxConcurrency": 1
+    },
+    "Get Summary Email": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${GetTopBlogs}",
+        "Payload": {
+          "top": 5
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Send Email"
+    },
+    "Send Email": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "subject": "Weekly Article Performance",
+              "to": "${AdminEmail}",
+              "html.$": "$.emailHtml"
+            },
+            "DetailType": "Send Email",
+            "Source": "user.articleSummaryStateMachine"
+          }
+        ]
+      },
+      "End": true
+    }
+  }
+}
