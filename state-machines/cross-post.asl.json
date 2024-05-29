@@ -1,10 +1,10 @@
 {
-  "Comment": "Cross-post a blog on dev.to, medium, and hashnode",
-  "StartAt": "Get Existing Article",
+  "Comment": "Publish and cross-post a blog on dev.to, medium, and hashnode",
+  "StartAt": "Get Idempotency Record",
   "States": {
-    "Get Existing Article": {
+    "Get Idempotency Record": {
       "Type": "Task",
-      "Resource": "${DynamodbGetItem}",
+      "Resource": "${DynamoDbGetItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -12,42 +12,42 @@
             "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
           },
           "sk": {
-            "S": "article"
+            "S": "blog"
           }
         }
       },
-      "Next": "Has Article Been Processed?",
-      "ResultPath": "$.existingArticle"
+      "Next": "Has Been Processed?",
+      "ResultPath": "$.record"
     },
-    "Has Article Been Processed?": {
+    "Has Been Processed?": {
       "Type": "Choice",
       "Choices": [
         {
           "Not": {
-            "Variable": "$.existingArticle.Item",
+            "Variable": "$.record.Item",
             "IsPresent": true
           },
-          "Next": "Set Article Record To In Progress"
+          "Next": "Set Record To In Progress"
         },
         {
           "And": [
             {
-              "Variable": "$.existingArticle.Item",
+              "Variable": "$.record.Item",
               "IsPresent": true
             },
             {
-              "Variable": "$.existingArticle.Item.status.S",
+              "Variable": "$.record.Item.status.S",
               "StringEquals": "failed"
             }
           ],
-          "Next": "Set Article Record To In Progress"
+          "Next": "Set Record To In Progress"
         }
       ],
       "Default": "Success - Duplicate Request"
     },
-    "Set Article Record To In Progress": {
+    "Set Record To In Progress": {
       "Type": "Task",
-      "Resource": "${DynamodbUpdateItem}",
+      "Resource": "${DynamoDbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -55,7 +55,7 @@
             "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
           },
           "sk": {
-            "S": "article"
+            "S": "blog"
           }
         },
         "UpdateExpression": "SET #status = :status",
@@ -68,18 +68,86 @@
           }
         }
       },
-      "Next": "Load Blog Content",
+      "Next": "Is Scheduled In The Future?",
       "ResultPath": null
     },
-    "Load Blog Content": {
+    "Is Scheduled In The Future?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.futureDate",
+          "IsPresent": true,
+          "Next": "Wait For Future Date"
+        }
+      ],
+      "Default": "Load Blog Metadata"
+    },
+    "Wait For Future Date": {
+      "Type": "Wait",
+      "TimestampPath": "$.futureDate",
+      "Next": "Trigger Site Rebuild"
+    },
+    "Trigger Site Rebuild": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "reason": "Scheduled blog"
+            },
+            "DetailType": "Trigger Site Rebuild",
+            "Source": "user.CrossPostStateMachine"
+          }
+        ]
+      },
+      "Next": "Load Blog Metadata"
+    },
+    "Load Blog Metadata": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
-      "ResultPath": "$.blog",
+      "ResultPath": "$.data",
+      "ResultSelector": {
+        "metadata.$": "$.Payload.metadata"
+      },
+      "Parameters": {
+        "FunctionName": "${GetBlogContent}",
+        "Payload": {
+          "fileName.$": "$$.Execution.Input.detail.fileName",
+          "includeMetadata": true
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Generate Crosspost Dates",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Record - Failure"
+        }
+      ]
+    },
+    "Generate Crosspost Dates": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
       "ResultSelector": {
         "content.$": "$.Payload.content"
       },
       "Parameters": {
-        "FunctionName": "${GetBlogContent}",
+        "FunctionName": "${GetCrosspostDates}",
         "Payload": {
           "fileName.$": "$$.Execution.Input.detail.fileName"
         }
@@ -97,46 +165,43 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Load Article Catalog",
+      "Next": "Save Catalog Entry",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Next": "Update Article Record (Failure)"
+          "Next": "Update Record - Failure"
         }
-      ]
+      ],
+      "OutputPath": "$.Payload"
     },
-    "Load Article Catalog": {
+    "Save Catalog Entry": {
       "Type": "Task",
-      "Next": "Transform and Publish",
+      "Resource": "${DynamoDbPutItem}",
       "Parameters": {
         "TableName": "${TableName}",
-        "IndexName": "GSI1",
-        "KeyConditionExpression": "#GSI1PK = :GSI1PK",
-        "ExpressionAttributeNames": {
-          "#GSI1PK": "GSI1PK"
-        },
-        "ExpressionAttributeValues": {
-          ":GSI1PK": {
-            "S": "article"
+        "Item": {
+          "pk": {
+            "S.$": "$$.Execution.Input.detail.url"
+          },
+          "sk": {
+            "S": "blog"
+          },
+          "GSI1PK": {
+            "S.$": "States.Format('blog#{}', $.data.metadata.author)"
+          },
+          "GSI1SK": {
+            "S.$": "$$.Execution.Input.detail.fileName"
           }
         }
       },
-      "Resource": "${DynamodbQuery}",
-      "ResultPath": "$.catalog",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "Update Article Record (Failure)"
-        }
-      ]
+      "ResultPath": null,
+      "Next": "Schedule Crossposts"
     },
-    "Update Article Record (Failure)": {
+    "Update Record - Failure": {
       "Type": "Task",
-      "Resource": "${DynamodbUpdateItem}",
+      "Resource": "${DynamoDbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -144,7 +209,7 @@
             "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
           },
           "sk": {
-            "S": "article"
+            "S": "blog"
           }
         },
         "UpdateExpression": "SET #status = :status",
@@ -160,120 +225,27 @@
       "End": true,
       "ResultPath": null
     },
-    "Transform and Publish": {
+    "Schedule Crossposts": {
       "Type": "Parallel",
       "Branches": [
         {
-          "StartAt": "Skip Publish to Dev?",
+          "StartAt": "Wait For Dev Crosspost Date",
           "States": {
-            "Skip Publish to Dev?": {
-              "Type": "Choice",
-              "Choices": [
-                {
-                  "And": [
-                    {
-                      "Variable": "$.existingArticle.Item.dev.M.status.S",
-                      "IsPresent": true
-                    },
-                    {
-                      "Variable": "$.existingArticle.Item.dev.M.status.S",
-                      "StringEquals": "succeeded"
-                    }
-                  ],
-                  "Next": "Format Skipped Output - Dev"
-                }
-              ],
-              "Default": "Transform For Dev"
+            "Wait For Dev Crosspost Date": {
+              "Type": "Wait",
+              "Next": "Publish to Dev.to",
+              "TimestampPath": "$.dev"
             },
-            "Format Skipped Output - Dev": {
-              "Type": "Pass",
-              "Parameters": {
-                "url.$": "$.existingArticle.Item.url.S",
-                "devUrl.$": "$.existingArticle.Item.dev.M.devUrl.S",
-                "id.$": "$.existingArticle.Item.dev.M.id.S",
-                "success": true
-              },
-              "End": true
-            },
-            "Transform For Dev": {
+            "Publish to Dev.to": {
               "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "OutputPath": "$.Payload",
+              "Resource": "${StepFunctionsStartExecution}",
               "Parameters": {
-                "FunctionName": "${ParsePost}",
-                "Payload": {
-                  "post.$": "$.blog.content",
-                  "articleCatalog.$": "$.catalog.Items",
-                  "format": "dev"
-                }
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
-              "Next": "Publish to Dev",
-              "Catch": [
-                {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
-                  "Next": "Update Article Record (Failure-Dev)"
-                }
-              ]
-            },
-            "Update Article Record (Failure-Dev)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
-                  },
-                  "sk": {
-                    "S": "article"
-                  }
-                },
-                "UpdateExpression": "SET #dev = :dev",
-                "ExpressionAttributeNames": {
-                  "#dev": "dev"
-                },
-                "ExpressionAttributeValues": {
-                  ":dev": {
-                    "M": {
-                      "status": {
-                        "S": "failed"
-                      }
-                    }
-                  }
-                }
-              },
-              "ResultPath": null,
-              "Next": "Format Failed Output - Dev"
-            },
-            "Format Failed Output - Dev": {
-              "Type": "Pass",
-              "Parameters": {
-                "success": false
-              },
-              "End": true
-            },
-            "Publish to Dev": {
-              "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "Parameters": {
-                "FunctionName": "${SendApiRequest}",
-                "Payload": {
-                  "secretKey": "dev",
+                "StateMachineArn": "${PublishStateMachine}",
+                "Input": {
+                  "key.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)",
+                  "fileName.$": "$$.Execution.Input.detail.fileName",
+                  "url.$": "$$.Execution.Input.detail.url",
+                  "publisher": "dev",
                   "auth": {
                     "location": "header",
                     "key": "api-key"
@@ -283,198 +255,44 @@
                     "headers": {
                       "accept": "application/vnd.forem.api-v1+json"
                     },
-                    "baseUrl": "https://dev.to/api/articles",
-                    "body.$": "$.payload"
-                  }
-                }
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
-                  "Next": "Update Article Record (Failure-Dev)"
-                }
-              ],
-              "ResultPath": "$.result",
-              "Next": "Update Article Record (Success-Dev)"
-            },
-            "Update Article Record (Success-Dev)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
+                    "baseUrl": "https://dev.to/api/articles"
                   },
-                  "sk": {
-                    "S": "article"
-                  }
-                },
-                "UpdateExpression": "SET #dev = :dev, #url = :url",
-                "ExpressionAttributeNames": {
-                  "#dev": "dev",
-                  "#url": "url"
-                },
-                "ExpressionAttributeValues": {
-                  ":dev": {
-                    "M": {
-                      "status": {
-                        "S": "succeeded"
-                      },
-                      "devUrl": {
-                        "S.$": "$.result.Payload.url"
-                      },
-                      "id": {
-                        "S.$": "States.Format('{}', $.result.Payload.id)"
-                      }
+                  "output": {
+                    "url": {
+                      "format": "path",
+                      "path": "$.result.Payload.id"
+                    },
+                    "id": {
+                      "format": "composed",
+                      "path": "$.result.Payload.id",
+                      "template": "{}"
                     }
                   },
-                  ":url": {
-                    "S.$": "$.url"
-                  }
+                  "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id"
                 }
-              },
-              "ResultPath": null,
-              "Next": "Format Success Output - Dev"
-            },
-            "Format Success Output - Dev": {
-              "Type": "Pass",
-              "Parameters": {
-                "url.$": "$.url",
-                "devUrl.$": "$.result.Payload.url",
-                "id.$": "States.Format('{}', $.result.Payload.id)",
-                "success": true
               },
               "End": true
             }
           }
         },
         {
-          "StartAt": "Skip Publish to Medium?",
+          "StartAt": "Wait For Medium Crosspost Date",
           "States": {
-            "Skip Publish to Medium?": {
-              "Type": "Choice",
-              "Choices": [
-                {
-                  "And": [
-                    {
-                      "Variable": "$.existingArticle.Item.medium.M.status.S",
-                      "IsPresent": true
-                    },
-                    {
-                      "Variable": "$.existingArticle.Item.medium.M.status.S",
-                      "StringEquals": "succeeded"
-                    }
-                  ],
-                  "Next": "Format Skipped Output - Medium"
-                }
-              ],
-              "Default": "Transform For Medium"
-            },
-            "Format Skipped Output - Medium": {
-              "Type": "Pass",
-              "Parameters": {
-                "url.$": "$.existingArticle.Item.url.S",
-                "mediumUrl.$": "$.existingArticle.Item.medium.M.mediumUrl.S",
-                "id.$": "$.existingArticle.Item.medium.M.id.S",
-                "success": true
-              },
-              "End": true
-            },
-            "Transform For Medium": {
-              "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "OutputPath": "$.Payload",
-              "Parameters": {
-                "FunctionName": "${ParsePost}",
-                "Payload": {
-                  "post.$": "$.blog.content",
-                  "articleCatalog.$": "$.catalog.Items",
-                  "format": "medium"
-                }
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
-                  "Next": "Update Article Record (Failure-Medium)"
-                }
-              ],
-              "Next": "Publish to Medium"
-            },
-            "Update Article Record (Failure-Medium)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
-                  },
-                  "sk": {
-                    "S": "article"
-                  }
-                },
-                "UpdateExpression": "SET #medium = :medium",
-                "ExpressionAttributeNames": {
-                  "#medium": "medium"
-                },
-                "ExpressionAttributeValues": {
-                  ":medium": {
-                    "M": {
-                      "status": {
-                        "S": "failed"
-                      }
-                    }
-                  }
-                }
-              },
-              "ResultPath": null,
-              "Next": "Format Failed Output - Medium"
-            },
-            "Format Failed Output - Medium": {
-              "Type": "Pass",
-              "Parameters": {
-                "success": false
-              },
-              "End": true
+            "Wait For Medium Crosspost Date": {
+              "Type": "Wait",
+              "Next": "Publish to Medium",
+              "TimestampPath": "$.medium"
             },
             "Publish to Medium": {
               "Type": "Task",
-              "Resource": "${LambdaInvoke}",
+              "Resource": "${StepFunctionsStartExecution}",
               "Parameters": {
-                "FunctionName": "${SendApiRequest}",
-                "Payload": {
-                  "secretKey": "medium",
+                "StateMachineArn": "${PublishStateMachine}",
+                "Input": {
+                  "key.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)",
+                  "fileName.$": "$$.Execution.Input.detail.fileName",
+                  "url.$": "$$.Execution.Input.detail.url",
+                  "publisher": "medium",
                   "auth": {
                     "location": "query",
                     "key": "accessToken"
@@ -482,160 +300,43 @@
                   "request": {
                     "method": "POST",
                     "baseUrl": "https://api.medium.com/v1/publications/5517fd7b58a6/posts",
-                    "body.$": "$.payload"
-                  }
-                }
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
-                  "Next": "Update Article Record (Failure-Medium)"
-                }
-              ],
-              "Next": "Update Article Record (Success-Medium)",
-              "ResultPath": "$.result"
-            },
-            "Update Article Record (Success-Medium)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
+                    "headers": {}
                   },
-                  "sk": {
-                    "S": "article"
-                  }
-                },
-                "UpdateExpression": "SET #medium = :medium, #url = :url",
-                "ExpressionAttributeNames": {
-                  "#medium": "medium",
-                  "#url": "url"
-                },
-                "ExpressionAttributeValues": {
-                  ":medium": {
-                    "M": {
-                      "status": {
-                        "S": "succeeded"
-                      },
-                      "mediumUrl": {
-                        "S.$": "$.result.Payload.data.url"
-                      },
-                      "id": {
-                        "S.$": "$.result.Payload.data.id"
-                      }
+                  "output": {
+                    "url": {
+                      "format": "path",
+                      "path": "$.result.Payload.data.url"
+                    },
+                    "id": {
+                      "format": "path",
+                      "path": "$.result.Payload.data.id"
                     }
                   },
-                  ":url": {
-                    "S.$": "$.url"
-                  }
+                  "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id"
                 }
               },
-              "ResultPath": null,
-              "Next": "Format Success Output - Medium"
-            },
-            "Format Success Output - Medium": {
-              "Type": "Pass",
-              "End": true,
-              "Parameters": {
-                "mediumUrl.$": "$.result.Payload.data.url",
-                "url.$": "$.url",
-                "id.$": "$.result.Payload.data.id",
-                "success": true
-              }
+              "End": true
             }
           }
         },
         {
-          "StartAt": "Skip Publish to Hashnode?",
+          "StartAt": "Wait For Hashnode Crosspost Date",
           "States": {
-            "Skip Publish to Hashnode?": {
-              "Type": "Choice",
-              "Choices": [
-                {
-                  "And": [
-                    {
-                      "Variable": "$.existingArticle.Item.hashnode.M.status.S",
-                      "IsPresent": true
-                    },
-                    {
-                      "Variable": "$.existingArticle.Item.hashnode.M.status.S",
-                      "StringEquals": "succeeded"
-                    }
-                  ],
-                  "Next": "Format Skipped Output - Hashnode"
-                }
-              ],
-              "Default": "Transform For Hashnode"
-            },
-            "Format Skipped Output - Hashnode": {
-              "Type": "Pass",
-              "End": true,
-              "Parameters": {
-                "url.$": "$.existingArticle.Item.url.S",
-                "hashnodeUrl.$": "$.existingArticle.Item.hashnode.M.hashnodeUrl.S",
-                "id.$": "$.existingArticle.Item.hashnode.M.id.S",
-                "success": true
-              }
-            },
-            "Transform For Hashnode": {
-              "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "OutputPath": "$.Payload",
-              "Parameters": {
-                "FunctionName": "${ParsePost}",
-                "Payload": {
-                  "post.$": "$.blog.content",
-                  "articleCatalog.$": "$.catalog.Items",
-                  "format": "hashnode"
-                }
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
-                  "Next": "Update Article Record (Failure-Hashnode)"
-                }
-              ],
-              "Next": "Publish to Hashnode"
+            "Wait For Hashnode Crosspost Date": {
+              "Type": "Wait",
+              "Next": "Publish to Hashnode",
+              "TimestampPath": "$.hashnode"
             },
             "Publish to Hashnode": {
               "Type": "Task",
-              "Resource": "${LambdaInvoke}",
+              "Resource": "${StepFunctionsStartExecution}",
               "Parameters": {
-                "FunctionName": "${SendApiRequest}",
-                "Payload": {
-                  "secretKey": "hashnode",
+                "StateMachineArn": "${PublishStateMachine}",
+                "Input": {
+                  "key.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)",
+                  "fileName.$": "$$.Execution.Input.detail.fileName",
+                  "url.$": "$$.Execution.Input.detail.url",
+                  "publisher": "hashnode",
                   "auth": {
                     "location": "header",
                     "key": "Authorization"
@@ -645,160 +346,33 @@
                     "headers": {
                       "content-type": "application/json"
                     },
-                    "baseUrl": "https://gql.hashnode.com",
-                    "body.$": "$.payload"
-                  }
-                }
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": [
-                    "States.ALL"
-                  ],
-                  "Next": "Update Article Record (Failure-Hashnode)"
-                }
-              ],
-              "ResultPath": "$.result",
-              "Next": "Update Article Record (Success-Hashnode)"
-            },
-            "Update Article Record (Success-Hashnode)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
+                    "baseUrl": "https://gql.hashnode.com"
                   },
-                  "sk": {
-                    "S": "article"
-                  }
-                },
-                "UpdateExpression": "SET #hashnode = :hashnode, #url = :url",
-                "ExpressionAttributeNames": {
-                  "#hashnode": "hashnode",
-                  "#url": "url"
-                },
-                "ExpressionAttributeValues": {
-                  ":hashnode": {
-                    "M": {
-                      "status": {
-                        "S": "succeeded"
-                      },
-                      "hashnodeUrl": {
-                        "S.$": "States.Format('${HashnodeBlogUrl}/{}', $.result.Payload.data.publishPost.post.slug)"
-                      },
-                      "id": {
-                        "S.$": "$.result.Payload.data.publishPost.post.slug"
-                      }
+                  "output": {
+                    "url": {
+                      "format": "composed",
+                      "path": "$.result.Payload.data.publishPost.post.slug",
+                      "template": "https://allenheltondev.hashnode.dev/{}"
+                    },
+                    "id": {
+                      "format": "path",
+                      "path": "$.result.Payload.data.publishPost.post.slug"
                     }
                   },
-                  ":url": {
-                    "S.$": "$.url"
-                  }
+                  "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id"
                 }
-              },
-              "ResultPath": null,
-              "Next": "Format Hashnode Data"
-            },
-            "Format Hashnode Data": {
-              "Type": "Pass",
-              "End": true,
-              "Parameters": {
-                "hashnodeUrl.$": "States.Format('${HashnodeBlogUrl}/{}', $.result.Payload.data.publishPost.post.slug)",
-                "url.$": "$.url",
-                "id.$": "$.result.Payload.data.publishPost.post.slug",
-                "success": true
-              }
-            },
-            "Update Article Record (Failure-Hashnode)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
-                  },
-                  "sk": {
-                    "S": "article"
-                  }
-                },
-                "UpdateExpression": "SET #hashnode = :hashnode",
-                "ExpressionAttributeNames": {
-                  "#hashnode": "hashnode"
-                },
-                "ExpressionAttributeValues": {
-                  ":hashnode": {
-                    "M": {
-                      "status": {
-                        "S": "failed"
-                      }
-                    }
-                  }
-                }
-              },
-              "ResultPath": null,
-              "Next": "Format Failed Output - Hashnode"
-            },
-            "Format Failed Output - Hashnode": {
-              "Type": "Pass",
-              "Parameters": {
-                "success": false
               },
               "End": true
             }
           }
         }
       ],
-      "Next": "Format Failure Check",
+      "Next": "Update Record - Success",
       "ResultPath": "$.transform"
     },
-    "Format Failure Check": {
-      "Type": "Pass",
-      "Next": "Check For Failures",
-      "Parameters": {
-        "results.$": "$.transform",
-        "failureFormat": {
-          "success": false
-        }
-      }
-    },
-    "Check For Failures": {
-      "Type": "Pass",
-      "Next": "Did Failure Occur?",
-      "Parameters": {
-        "results.$": "$.results",
-        "hasFailure.$": "States.ArrayContains($.results, $.failureFormat)"
-      }
-    },
-    "Did Failure Occur?": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.hasFailure",
-          "BooleanEquals": true,
-          "Next": "Update Article Record (failed)"
-        }
-      ],
-      "Default": "Format Catalog Article"
-    },
-    "Update Article Record (failed)": {
+    "Update Record - Success": {
       "Type": "Task",
-      "Resource": "${DynamodbUpdateItem}",
+      "Resource": "${DynamoDbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -806,7 +380,7 @@
             "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
           },
           "sk": {
-            "S": "article"
+            "S": "blog"
           }
         },
         "UpdateExpression": "SET #status = :status",
@@ -815,162 +389,12 @@
         },
         "ExpressionAttributeValues": {
           ":status": {
-            "S": "failed"
+            "S": "succeeded"
           }
         }
       },
       "ResultPath": null,
-      "Next": "Send Failure Email"
-    },
-    "Send Failure Email": {
-      "Type": "Task",
-      "Resource": "${EventBridgePutEvents}",
-      "Parameters": {
-        "Entries": [
-          {
-            "Detail": {
-              "subject": "Cross Post Failed!",
-              "to": "${AdminEmail}",
-              "html.$": "States.Format('<p>Republishing of your new blog post failed :(</p><p>Found file: <i>{}</i></p><p><a href=\"${ExecutionUrl}/{}\">View state machine execution</a></p>', $$.Execution.Input.detail.fileName, $$.Execution.Id)"
-            },
-            "DetailType": "Send Email",
-            "Source": "user.CrossPostStateMachine"
-          }
-        ]
-      },
       "End": true
-    },
-    "Format Catalog Article": {
-      "Type": "Pass",
-      "Parameters": {
-        "url.$": "$.results[0].url",
-        "devUrl.$": "$.results[0].devUrl",
-        "mediumUrl.$": "$.results[1].mediumUrl",
-        "hashnodeUrl.$": "$.results[2].hashnodeUrl",
-        "ids": {
-          "mediumId.$": "$.results[1].id",
-          "devId.$": "$.results[0].id",
-          "hashnodeId.$": "$.results[2].id"
-        }
-      },
-      "Next": "Save Records"
-    },
-    "Save Records": {
-      "Type": "Parallel",
-      "Next": "Send Success Email",
-      "Branches": [
-        {
-          "StartAt": "Save Catalog Article",
-          "States": {
-            "Save Catalog Article": {
-              "Type": "Task",
-              "Resource": "${DynamodbPutItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Item": {
-                  "pk": {
-                    "S.$": "$.url"
-                  },
-                  "sk": {
-                    "S": "article"
-                  },
-                  "GSI1PK": {
-                    "S": "article"
-                  },
-                  "GSI1SK": {
-                    "S.$": "$$.Execution.Input.detail.fileName"
-                  },
-                  "ids": {
-                    "M": {
-                      "devId": {
-                        "S.$": "$.ids.devId"
-                      },
-                      "mediumId": {
-                        "S.$": "$.ids.mediumId"
-                      },
-                      "hashnodeId": {
-                        "S.$": "$.ids.hashnodeId"
-                      }
-                    }
-                  },
-                  "links": {
-                    "M": {
-                      "devUrl": {
-                        "S.$": "$.devUrl"
-                      },
-                      "url": {
-                        "S.$": "$.url"
-                      },
-                      "mediumUrl": {
-                        "S.$": "$.mediumUrl"
-                      },
-                      "hashnodeUrl": {
-                        "S.$": "$.hashnodeUrl"
-                      }
-                    }
-                  }
-                }
-              },
-              "ResultPath": null,
-              "End": true
-            }
-          }
-        },
-        {
-          "StartAt": "Update Article Record (success)",
-          "States": {
-            "Update Article Record (success)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
-                  },
-                  "sk": {
-                    "S": "article"
-                  }
-                },
-                "UpdateExpression": "SET #status = :status",
-                "ExpressionAttributeNames": {
-                  "#status": "status"
-                },
-                "ExpressionAttributeValues": {
-                  ":status": {
-                    "S": "succeeded"
-                  }
-                }
-              },
-              "ResultPath": null,
-              "End": true
-            }
-          }
-        }
-      ],
-      "ResultPath": null
-    },
-    "Send Success Email": {
-      "Type": "Task",
-      "Resource": "${EventBridgePutEvents}",
-      "Parameters": {
-        "Entries": [
-          {
-            "Detail": {
-              "subject": "Cross Post Successful!",
-              "to": "${AdminEmail}",
-              "html.$": "States.Format('<p>Republishing of your new blog post was successful!</p><p>Found file: <i>{}</i></p><p><b>Links</b></p><ul><li><b><a href=\"{}\">Medium</a></b></li><li><b><a href=\"{}\">Dev.to</a></b></li><li><b><a href=\"{}\">Hashnode</a></b></li></ul>', $$.Execution.Input.detail.fileName, $.mediumUrl, $.devUrl, $.hashnodeUrl)"
-            },
-            "DetailType": "Send Email",
-            "Source": "user.CrossPostStateMachine"
-          }
-        ]
-      },
-      "Next": "Success",
-      "ResultPath": null
-    },
-    "Success": {
-      "Type": "Succeed"
     },
     "Success - Duplicate Request": {
       "Type": "Succeed",

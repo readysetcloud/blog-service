@@ -1,0 +1,448 @@
+{
+  "Comment": "Publish a blog to a specific publication",
+  "StartAt": "Get Idempotency Record",
+  "States": {
+    "Get Idempotency Record": {
+      "Type": "Task",
+      "Resource": "${DynamoDbGetItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "$$.Execution.Input.key"
+          },
+          "sk": {
+            "S": "blog"
+          }
+        }
+      },
+      "Next": "Get Publisher Status",
+      "ResultPath": "$.record"
+    },
+    "Get Publisher Status": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${GetPublisherStatus}",
+        "Payload": {
+          "record.$": "$.record"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Has Been Processed?",
+      "ResultPath": "$.status",
+      "ResultSelector": {
+        "current.$": "$.Payload.status"
+      }
+    },
+    "Has Been Processed?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.status.current",
+          "StringEquals": "succeeded",
+          "Next": "Success - Duplicate Request"
+        }
+      ],
+      "Default": "Set Record To In Progress"
+    },
+    "Set Record To In Progress": {
+      "Type": "Task",
+      "Resource": "${DynamoDbUpdateItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "$$.Execution.Input.key"
+          },
+          "sk": {
+            "S": "blog"
+          }
+        },
+        "UpdateExpression": "SET #publisher.#status = :status",
+        "ExpressionAttributeNames": {
+          "#publisher.$": "$$.Execution.Input.publisher",
+          "#status": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "in progress"
+          }
+        }
+      },
+      "Next": "Load Blog Content",
+      "ResultPath": null
+    },
+    "Load Blog Content": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "ResultPath": "$.data",
+      "ResultSelector": {
+        "content.$": "$.Payload.content",
+        "metadata.$": "$.Payload.metadata"
+      },
+      "Parameters": {
+        "FunctionName": "${GetBlogContent}",
+        "Payload": {
+          "fileName.$": "$$.Execution.Input.detail.fileName",
+          "includeMetadata": true
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Load Catalog",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Record - Publisher Fail"
+        }
+      ]
+    },
+    "Load Catalog": {
+      "Type": "Task",
+      "Next": "Transform For Publisher",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "IndexName": "GSI1",
+        "KeyConditionExpression": "#GSI1PK = :GSI1PK",
+        "ExpressionAttributeNames": {
+          "#GSI1PK": "GSI1PK"
+        },
+        "ExpressionAttributeValues": {
+          ":GSI1PK": {
+            "S.$": "States.Format('blog#{}', $.data.metadata.author)"
+          }
+        }
+      },
+      "Resource": "${DynamoDbQuery}",
+      "ResultPath": "$.catalog",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Record - Publisher Fail"
+        }
+      ]
+    },
+    "Transform For Publisher": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "ResultPath": "$.transformed",
+      "ResultSelector": {
+        "payload.$": "$.Payload.payload"
+      },
+      "Parameters": {
+        "FunctionName": "${ParseBlog}",
+        "Payload": {
+          "post.$": "$.data.content",
+          "catalog.$": "$.catalog.Items",
+          "format.$": "$$.Execution.Input.publisher"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Publish",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Record - Publisher Fail"
+        }
+      ]
+    },
+    "Publish": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${SendApiRequest}",
+        "Payload": {
+          "secretKey.$": "$$.Execution.Input.publisher",
+          "auth.$": "$$.Execution.Input.auth",
+          "request": {
+            "method.$": "$$.Execution.Input.request.method",
+            "headers": "$$.Execution.Input.request.headers",
+            "baseUrl": "$$.Execution.Input.request.baseUrl",
+            "body.$": "$.transformed.payload"
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Record - Publisher Fail",
+          "ResultPath": null
+        }
+      ],
+      "ResultPath": "$.result",
+      "Next": "Get Publisher Output"
+    },
+    "Get Publisher Output": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${GetPublisherOutput}",
+        "Payload": {
+          "result.$": "$.result",
+          "url.$": "$$.Execution.Input.output.url",
+          "id.$": "$$.Execution.Input.output.id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Update Database Records",
+      "ResultPath": "$.publisher",
+      "ResultSelector": {
+        "output.$": "$.Payload.output"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Record - Publisher Fail"
+        }
+      ]
+    },
+    "Update Database Records": {
+      "Type": "Parallel",
+      "Next": "Send Success Email",
+      "Branches": [
+        {
+          "StartAt": "Update Record- Success",
+          "States": {
+            "Update Record- Success": {
+              "Type": "Task",
+              "Resource": "${DynamoDbUpdateItem}",
+              "Parameters": {
+                "TableName": "${TableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$$.Execution.Input.key"
+                  },
+                  "sk": {
+                    "S": "blog"
+                  }
+                },
+                "UpdateExpression": "SET #publisher = :publisher",
+                "ExpressionAttributeNames": {
+                  "#publisher.$": "$$.Execution.Input.publisher"
+                },
+                "ExpressionAttributeValues": {
+                  ":publisher": {
+                    "M": {
+                      "status": {
+                        "S": "succeeded"
+                      },
+                      "url": {
+                        "S.$": "$.publisher.output.url"
+                      },
+                      "id": {
+                        "S.$": "$.publisher.output.url"
+                      }
+                    }
+                  }
+                }
+              },
+              "ResultPath": null,
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "BackoffRate": 2,
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "JitterStrategy": "FULL"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "StartAt": "Update Catalog",
+          "States": {
+            "Update Catalog": {
+              "Type": "Task",
+              "Resource": "${DynamoDbUpdateItem}",
+              "Parameters": {
+                "TableName": "${TableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$$.Execution.Input.url"
+                  },
+                  "sk": {
+                    "S": "blog"
+                  }
+                },
+                "UpdateExpression": "SET #ids.#publisher = :id, #links.#publisher = :link",
+                "ExpressionAttributeNames": {
+                  "#publisher.$": "$$.Execution.Input.publisher",
+                  "#ids": "ids",
+                  "#links": "links"
+                },
+                "ExpressionAttributeValues": {
+                  ":id": {
+                    "S.$": "$.publisher.output.id"
+                  },
+                  ":link": {
+                    "S.$": "$.publisher.output.link"
+                  }
+                }
+              },
+              "ResultPath": null,
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "BackoffRate": 2,
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "JitterStrategy": "FULL"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "ResultPath": null
+    },
+    "Send Success Email": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "subject.$": "States.Format('[Ready, Set, Cloud] Blog cross-posted to {}', $$.Execution.Input.publisher)",
+              "to": "${AdminEmail}",
+              "html.$": "States.Format('<h2>Republishing of your blog post was successful!</h2><p>I successfully published the blog at <i>{}</i> to {}!</p><p>Feel free to <a href=\"{}\">check it out</a>.</p><p>Love,</p><p>Allen</p>', $$.Execution.Input.detail.fileName, $$.Execution.Input.publisher, $.publisher.output.link)"
+            },
+            "DetailType": "Send Email",
+            "Source": "user.CrossPostStateMachine"
+          }
+        ]
+      },
+      "Next": "Success",
+      "ResultPath": null
+    },
+    "Update Record - Publisher Fail": {
+      "Type": "Task",
+      "Resource": "${DynamoDbUpdateItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "$$.Execution.Input.key"
+          },
+          "sk": {
+            "S": "blog"
+          }
+        },
+        "UpdateExpression": "SET #publisher.#status = :status",
+        "ExpressionAttributeNames": {
+          "#publisher.$": "$$.Execution.Input.publisher",
+          "#status": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "failed"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Send Failure Email"
+    },
+    "Send Failure Email": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "subject.$": "States.Format('[Ready, Set, Cloud] Cross-post failed to {}', $$.Execution.Input.publisher)",
+              "to": "${AdminEmail}",
+              "html.$": "States.Format('<h2>Republishing of your blog post failed ☹️</h2> <p>I tried publishing your blog at <i>{}</i> to {}, but something messed up.</p><p>Go <a href=\"${ExecutionUrl}/{}\">check the logs</a>.</p>', $$.Execution.Input.fileName, $$.Execution.Input.publisher, $$.Execution.Id)"
+            },
+            "DetailType": "Send Email",
+            "Source": "user.CrossPostStateMachine"
+          }
+        ]
+      },
+      "End": true
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Success - Duplicate Request": {
+      "Type": "Succeed",
+      "Comment": "This publisher has already been processed"
+    }
+  }
+}

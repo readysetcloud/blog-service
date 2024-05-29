@@ -10,17 +10,17 @@ export const handler = async (state) => {
   let ids = state.ids;
   if (state.unmarshallIds) {
     ids = {
-      ...ids.M.mediumId && { mediumId: ids.M.mediumId.S },
-      ...ids.M.devId && { devId: ids.M.devId.S },
-      ...ids.M.hashnodeId && { hashnodeId: ids.M.hashnodeId.S }
+      ...ids.M.medium && { medium: ids.M.medium.S },
+      ...ids.M.dev && { dev: ids.M.dev.S },
+      ...ids.M.hashnode && { hashnode: ids.M.hashnode.S }
     };
   }
 
   const allViews = await Promise.all([
     await getRSCData(state.blog),
-    await getMediumData(ids.mediumId),
-    await getDevData(ids.devId),
-    await getHashnodeData(ids.hashnodeId)
+    await getMediumData(ids.medium),
+    await getDevData(ids.dev),
+    await getHashnodeData(ids.hashnode)
   ]);
 
   const views = {

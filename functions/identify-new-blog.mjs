@@ -96,12 +96,29 @@ const processNewContent = async (newContent) => {
   const today = new Date();
   const executions = await Promise.allSettled(newContent.map(async (content) => {
     const metadata = frontmatter(content.content);
-    const date = new Date(metadata.data.date);
-    if (date > today) {
-      await scheduleFuturePost(content, metadata.data.date);
-    } else {
-      await processContentNow(content);
+    let postDate = metadata.data.date;
+    if (!postDate.includes('T')) {
+      postDate = `${postDate}T23:59:59`;
     }
+
+    const date = new Date(postDate);
+    if (date > today) {
+      content.futureDate = `${metadata.data.date.split('T')[0]}T12:00:00Z`;
+    }
+
+    await eventBridge.send(new PutEventsCommand({
+      Entries: [
+        {
+          Source: 'rsc.identify-new-blog',
+          DetailType: 'Process New Blog',
+          Detail: JSON.stringify({
+            fileName: content.fileName,
+            commit: content.commit,
+            ...content.futureDate && { futureDate: content.futureDate }
+          })
+        }
+      ]
+    }));
   }));
 
   for (const execution of executions) {
@@ -109,38 +126,4 @@ const processNewContent = async (newContent) => {
       console.error(execution.reason);
     }
   }
-};
-
-const scheduleFuturePost = async (content, date) => {
-  await eventBridge.send(new PutEventsCommand({
-    Entries: [
-      {
-        Source: 'rsc.identify-new-content',
-        DetailType: 'Schedule Post',
-        Detail: JSON.stringify({
-          fileName: content.fileName,
-          commit: content.commit,
-          date: date,
-          type: 'blog'
-        })
-      }
-    ]
-  }
-  ));
-};
-
-const processContentNow = async (content) => {
-  await eventBridge.send(new PutEventsCommand({
-    Entries: [
-      {
-        Source: 'rsc.identify-new-blog',
-        DetailType: 'Process New Blog',
-        Detail: JSON.stringify({
-          fileName: content.fileName,
-          commit: content.commit
-        })
-      }
-    ]
-  }
-  ));
 };

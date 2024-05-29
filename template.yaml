@@ -219,24 +219,55 @@ Resources:
           OWNER: !Ref GitHubOwner
           REPO: !Ref GitHubRepo
 
+  GetPublisherStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-publisher-status.mjs
+    Properties:
+      Handler: get-publisher-status.handler
+
+  GetPublisherOutputFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-publisher-output.mjs
+    Properties:
+      Handler: get-publisher-output.handler
+
+  GetCrosspostDatesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-crosspost-dates.mjs
+    Properties:
+      Handler: get-crosspost-dates.handler
+
   CrossPostStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
       DefinitionUri: state-machines/cross-post.asl.json
       DefinitionSubstitutions:
-        DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
+        DynamoDbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
+        DynamoDbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         TableName: !Ref BlogTable
-        DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
-        DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
-        DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
-        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        ParseBlog: !GetAtt ParseBlogFunction.Arn
-        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
-        AdminEmail: !Ref AdminEmail
-        HashnodeBlogUrl: !Ref HashnodeBlogUrl
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        ExecutionUrl: !Sub https://${AWS::Region}.console.${AWS::Partition}.amazon.com/states/home?region=${AWS::Region}#/v2/executions/details
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        GetCrosspostDates: !GetAtt GetCrosspostDatesFunction.Arn
+        GetBlogContent: !GetAtt GetBlogContentFunction.Arn
+        StepFunctionsStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution
+        PublishStateMachine: !Ref PublishStateMachine
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -247,16 +278,16 @@ Resources:
                 - dynamodb:UpdateItem
               Resource: !GetAtt BlogTable.Arn
             - Effect: Allow
-              Action: dynamodb:Query
-              Resource: !Sub ${BlogTable.Arn}/index/GSI1
-            - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
-                - !GetAtt ParseBlogFunction.Arn
-                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - !GetAtt GetCrosspostDatesFunction.Arn
+                - !GetAtt GetBlogContentFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref PublishStateMachine
       Events:
         EventInvocation:
           Type: EventBridgeRule
@@ -306,3 +337,46 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: "cron(0 11 ? * MON *)"
+
+  PublishStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/publish.asl.json
+      DefinitionSubstitutions:
+        DynamoDbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
+        DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        DynamoDbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
+        TableName: !Ref BlogTable
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        GetPublisherStatus: !GetAtt GetPublisherStatusFunction.Arn
+        GetBlogContent: !GetAtt GetBlogContentFunction.Arn
+        ParseBlog: !GetAtt ParseBlogFunction.Arn
+        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        GetPublisherOutput: !GetAtt GetPublisherOutputFunction.Arn
+        AdminEmail: !Ref AdminEmail
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+        ExecutionUrl: !Sub https://${AWS::Region}.console.${AWS::Partition}.amazon.com/states/home?region=${AWS::Region}#/v2/executions/details
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt BlogTable.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub ${BlogTable.Arn}/index/GSI1
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt GetPublisherStatusFunction.Arn
+                - !GetAtt GetBlogContentFunction.Arn
+                - !GetAtt ParseBlogFunction.Arn
+                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - !GetAtt GetPublisherOutputFunction.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+

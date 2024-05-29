@@ -8,13 +8,13 @@ export const handler = async (state) => {
   let payload;
   switch (state.format.toLowerCase()) {
     case 'medium':
-      payload = formatMediumData(details, state.articleCatalog, links, tweets);
+      payload = formatMediumData(details, state.catalog, links, tweets);
       break;
     case 'dev':
-      payload = formatDevData(details, state.articleCatalog, links, tweets);
+      payload = formatDevData(details, state.catalog, links, tweets);
       break;
     case 'hashnode':
-      payload = formatHashnodeData(details, state.articleCatalog, links, tweets);
+      payload = formatHashnodeData(details, state.catalog, links, tweets);
       break;
   }
   return {
@@ -23,7 +23,7 @@ export const handler = async (state) => {
   };
 };
 
-const formatMediumData = (postDetail, articleCatalog, links, tweets) => {
+const formatMediumData = (postDetail, catalog, links, tweets) => {
   let mediumContent = `\n# ${postDetail.data.title}\n`
     + `#### ${postDetail.data.description}\n`
     + `![${postDetail.data.image_attribution ?? ''}](${postDetail.data.image})\n`
@@ -31,10 +31,10 @@ const formatMediumData = (postDetail, articleCatalog, links, tweets) => {
 
   mediumContent = mediumContent.replace(/\n\n## /g, '\n\n---\n\n## ');
   for (const link of links) {
-    const replacement = articleCatalog.find(c => c.links.M.url.S == link[1]);
+    const replacement = catalog.find(c => c.links.M.url.S == link[1]);
     if (replacement) {
-      if (replacement.links.M.mediumUrl.S) {
-        mediumContent = mediumContent.replace(link[1], replacement.links.M.mediumUrl.S);
+      if (replacement.links.M.medium.S) {
+        mediumContent = mediumContent.replace(link[1], replacement.links.M.medium.S);
       } else {
         mediumContent = mediumContent.replace(link[1], `${process.env.BLOG_BASE_URL}${replacement.links.M.url.S}`);
       }
@@ -59,13 +59,13 @@ const formatMediumData = (postDetail, articleCatalog, links, tweets) => {
   return mediumData;
 };
 
-const formatDevData = (postDetail, articleCatalog, links, tweets) => {
+const formatDevData = (postDetail, catalog, links, tweets) => {
   let devContent = postDetail.content.slice(0);
   for (const link of links) {
-    const replacement = articleCatalog.find(c => c.links.M.url.S == link[1]);
+    const replacement = catalog.find(c => c.links.M.url.S == link[1]);
     if (replacement) {
-      if (replacement.links.M.devUrl.S) {
-        devContent = devContent.replace(link[1], replacement.links.M.devUrl.S);
+      if (replacement.links.M.dev.S) {
+        devContent = devContent.replace(link[1], replacement.links.M.dev.S);
       } else {
         devContent = devContent.replace(link[1], `${process.env.BLOG_BASE_URL}${replacement.links.M.url.S}`);
       }
@@ -91,13 +91,13 @@ const formatDevData = (postDetail, articleCatalog, links, tweets) => {
   return { article: devData };
 };
 
-const formatHashnodeData = (postDetail, articleCatalog, links, tweets) => {
+const formatHashnodeData = (postDetail, catalog, links, tweets) => {
   let hashnodeContent = postDetail.content.slice(0);
   for (const link of links) {
-    const replacement = articleCatalog.find(c => c.links.M.url.S == link[1]);
+    const replacement = catalog.find(c => c.links.M.url.S == link[1]);
     if (replacement) {
-      if (replacement.links.M.hashnodeUrl && replacement.links.M.hashnodeUrl.S) {
-        hashnodeContent = hashnodeContent.replace(link[1], replacement.links.M.hashnodeUrl.S);
+      if (replacement.links.M.hashnode?.S) {
+        hashnodeContent = hashnodeContent.replace(link[1], replacement.links.M.hashnode.S);
       } else {
         hashnodeContent = hashnodeContent.replace(link[1], `https://readysetcloud.io${replacement.links.M.url.S}`);
       }
