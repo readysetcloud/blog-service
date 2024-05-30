@@ -114,6 +114,8 @@ const processNewContent = async (newContent) => {
           Detail: JSON.stringify({
             fileName: content.fileName,
             commit: content.commit,
+            url: `/blog/${metadata.data.slug.substring(1)}`,
+            author: metadata.data.author,
             ...content.futureDate && { futureDate: content.futureDate }
           })
         }

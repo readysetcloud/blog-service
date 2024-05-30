@@ -80,7 +80,7 @@
           "Next": "Wait For Future Date"
         }
       ],
-      "Default": "Load Blog Metadata"
+      "Default": "Generate Crosspost Dates"
     },
     "Wait For Future Date": {
       "Type": "Wait",
@@ -101,44 +101,7 @@
           }
         ]
       },
-      "Next": "Load Blog Metadata"
-    },
-    "Load Blog Metadata": {
-      "Type": "Task",
-      "Resource": "${LambdaInvoke}",
-      "ResultPath": "$.data",
-      "ResultSelector": {
-        "metadata.$": "$.Payload.metadata"
-      },
-      "Parameters": {
-        "FunctionName": "${GetBlogContent}",
-        "Payload": {
-          "fileName.$": "$$.Execution.Input.detail.fileName",
-          "includeMetadata": true
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 6,
-          "BackoffRate": 2
-        }
-      ],
-      "Next": "Generate Crosspost Dates",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "Update Record - Failure"
-        }
-      ]
+      "Next": "Generate Crosspost Dates"
     },
     "Generate Crosspost Dates": {
       "Type": "Task",
@@ -189,7 +152,7 @@
             "S": "blog"
           },
           "GSI1PK": {
-            "S.$": "States.Format('blog#{}', $.data.metadata.author)"
+            "S.$": "States.Format('blog#{}', $$.Execution.Input.detail.author)"
           },
           "GSI1SK": {
             "S.$": "$$.Execution.Input.detail.fileName"
