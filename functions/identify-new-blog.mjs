@@ -112,6 +112,7 @@ const processNewContent = async (newContent) => {
           Source: 'rsc.identify-new-blog',
           DetailType: 'Process New Blog',
           Detail: JSON.stringify({
+            key: `${content.commit}#${content.fileName}`,
             fileName: content.fileName,
             commit: content.commit,
             url: `/blog/${metadata.data.slug.substring(1)}`,
