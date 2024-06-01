@@ -9,7 +9,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
+            "S.$": "$$.Execution.Input.detail.key"
           },
           "sk": {
             "S": "blog"
@@ -52,7 +52,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
+            "S.$": "$$.Execution.Input.detail.key"
           },
           "sk": {
             "S": "blog"
@@ -75,7 +75,7 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.futureDate",
+          "Variable": "$.detail.futureDate",
           "IsPresent": true,
           "Next": "Wait For Future Date"
         }
@@ -84,7 +84,7 @@
     },
     "Wait For Future Date": {
       "Type": "Wait",
-      "TimestampPath": "$.futureDate",
+      "TimestampPath": "$.detail.futureDate",
       "Next": "Trigger Site Rebuild"
     },
     "Trigger Site Rebuild": {
@@ -169,7 +169,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
+            "S.$": "$$.Execution.Input.detail.key"
           },
           "sk": {
             "S": "blog"
@@ -205,7 +205,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "key.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)",
+                  "key.$": "$$.Execution.Input.detail.key)",
                   "fileName.$": "$$.Execution.Input.detail.fileName",
                   "url.$": "$$.Execution.Input.detail.url",
                   "publisher": "dev",
@@ -252,7 +252,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "key.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)",
+                  "key.$": "$$.Execution.Input.detail.key",
                   "fileName.$": "$$.Execution.Input.detail.fileName",
                   "url.$": "$$.Execution.Input.detail.url",
                   "publisher": "medium",
@@ -296,7 +296,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "key.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)",
+                  "key.$": "$$.Execution.Input.detail.key",
                   "fileName.$": "$$.Execution.Input.detail.fileName",
                   "url.$": "$$.Execution.Input.detail.url",
                   "publisher": "hashnode",
@@ -340,7 +340,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "States.Format('{}#{}', $$.Execution.Input.detail.commit, $$.Execution.Input.detail.fileName)"
+            "S.$": "$$.Execution.Input.detail.key"
           },
           "sk": {
             "S": "blog"
@@ -361,7 +361,7 @@
     },
     "Success - Duplicate Request": {
       "Type": "Succeed",
-      "Comment": "This article has already been processed"
+      "Comment": "This blog has already been processed"
     }
   }
 }

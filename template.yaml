@@ -3,6 +3,15 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   Blog service powering Ready, Set, Cloud cross-posting and analytics
 
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [ sandbox, stage, production ]
+    Default: sandbox
+  HashnodeBlogUrl:
+    Type: String
+    Default: https://allenheltondev.hashnode.dev
+
 Metadata:
   esbuild-properties: &esbuild-properties
     Format: esm
@@ -17,27 +26,6 @@ Metadata:
       - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
     External:
       - '@aws-sdk/*'
-
-Parameters:
-  AmplifyAppId:
-    Type: String
-    Default: d31uo0a8ezw8ek
-  GitHubOwner:
-    Type: String
-    Default: readysetcloud
-  GitHubRepo:
-    Type: String
-    Default: ready-set-cloud
-  Environment:
-    Type: String
-    AllowedValues: [ sandbox, stage, production ]
-    Default: sandbox
-  AdminEmail:
-    Type: String
-    Default: allenheltondev@gmail.com
-  HashnodeBlogUrl:
-    Type: String
-    Default: https://allenheltondev.hashnode.dev
 
 Conditions:
   DeployProductionResources:
@@ -58,7 +46,7 @@ Globals:
     Environment:
       Variables:
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-        SECRET_ID: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+        SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
 
 Resources:
   BlogTable:
@@ -118,14 +106,14 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
-          OWNER: !Ref GitHubOwner
-          REPO: !Ref GitHubRepo
+          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
+          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
           COMMIT_TIME_TOLERANCE_MINUTES: 10
       Events:
         AmplifyBuildSuccessful:
@@ -138,7 +126,7 @@ Resources:
                 - Amplify Deployment Status Change
               detail:
                 appId:
-                  - !Ref AmplifyAppId
+                  - '{{resolve:ssm:/readysetcloud/amplify-app-id}}'
                 jobStatus:
                   - SUCCEED
 
@@ -159,7 +147,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
 
   CompareViewCountsFunction:
     Type: AWS::Serverless::Function
@@ -177,7 +165,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
 
   GetTopBlogsFunction:
     Type: AWS::Serverless::Function
@@ -195,7 +183,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
 
   GetBlogContentFunction:
     Type: AWS::Serverless::Function
@@ -213,11 +201,11 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
       Environment:
         Variables:
-          OWNER: !Ref GitHubOwner
-          REPO: !Ref GitHubRepo
+          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
+          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
 
   GetPublisherStatusFunction:
     Type: AWS::Serverless::Function
@@ -310,7 +298,7 @@ Resources:
         GetTopBlogs: !GetAtt GetTopBlogsFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: !Ref AdminEmail
+        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -352,9 +340,9 @@ Resources:
         GetPublisherStatus: !GetAtt GetPublisherStatusFunction.Arn
         GetBlogContent: !GetAtt GetBlogContentFunction.Arn
         ParseBlog: !GetAtt ParseBlogFunction.Arn
-        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         GetPublisherOutput: !GetAtt GetPublisherOutputFunction.Arn
-        AdminEmail: !Ref AdminEmail
+        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
         ExecutionUrl: !Sub https://${AWS::Region}.console.${AWS::Partition}.amazon.com/states/home?region=${AWS::Region}#/v2/executions/details
       Policies:
@@ -374,7 +362,7 @@ Resources:
                 - !GetAtt GetPublisherStatusFunction.Arn
                 - !GetAtt GetBlogContentFunction.Arn
                 - !GetAtt ParseBlogFunction.Arn
-                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetPublisherOutputFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
