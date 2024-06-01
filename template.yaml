@@ -106,7 +106,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
@@ -147,7 +147,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
 
   CompareViewCountsFunction:
     Type: AWS::Serverless::Function
@@ -165,7 +165,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
 
   GetTopBlogsFunction:
     Type: AWS::Serverless::Function
@@ -183,7 +183,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
 
   GetBlogContentFunction:
     Type: AWS::Serverless::Function
@@ -201,7 +201,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
       Environment:
         Variables:
           OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
@@ -340,7 +340,7 @@ Resources:
         GetPublisherStatus: !GetAtt GetPublisherStatusFunction.Arn
         GetBlogContent: !GetAtt GetBlogContentFunction.Arn
         ParseBlog: !GetAtt ParseBlogFunction.Arn
-        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         GetPublisherOutput: !GetAtt GetPublisherOutputFunction.Arn
         AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
@@ -362,7 +362,7 @@ Resources:
                 - !GetAtt GetPublisherStatusFunction.Arn
                 - !GetAtt GetBlogContentFunction.Arn
                 - !GetAtt ParseBlogFunction.Arn
-                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetPublisherOutputFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
