@@ -96,6 +96,7 @@
       "Parameters": {
         "FunctionName": "${GetBlogContent}",
         "Payload": {
+          "tenantId.$": "$$.Execution.Input.tenant.id",
           "fileName.$": "$$.Execution.Input.detail.fileName",
           "includeMetadata": true
         }
@@ -135,7 +136,7 @@
         },
         "ExpressionAttributeValues": {
           ":GSI1PK": {
-            "S.$": "States.Format('blog#{}', $.data.metadata.author)"
+            "S.$": "States.Format('blog#{}', $$.Execution.Input.tenant.id)"
           }
         }
       },

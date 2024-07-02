@@ -90,45 +90,43 @@ Resources:
       Policies:
         - AWSLambdaBasicExecutionRole
 
-  IdentifyNewBlogFunction:
+  ImportFromGithubFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - identify-new-blog.mjs
+          - import-from-github.mjs
     Properties:
-      Handler: identify-new-blog.handler
+      Handler: import-from-github.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+              Action: ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rsc/*
             - Effect: Allow
-              Action: events:PutEvents
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+              Action: dynamodb:GetItem
+              Resource: !GetAtt BlogTable.Arn
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref CrossPostStateMachine
       Environment:
         Variables:
-          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
-          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
-          COMMIT_TIME_TOLERANCE_MINUTES: 10
+          TABLE_NAME: !Ref BlogTable
+          STATE_MACHINE_ARN: !Ref CrossPostStateMachine
       Events:
-        AmplifyBuildSuccessful:
+        EventInvocation:
           Type: EventBridgeRule
           Properties:
             Pattern:
-              source:
-                - aws.amplify
               detail-type:
-                - Amplify Deployment Status Change
+                - Create New Blog
               detail:
-                appId:
-                  - '{{resolve:ssm:/readysetcloud/amplify-app-id}}'
-                jobStatus:
-                  - SUCCEED
+                source:
+                  - github
 
   GetViewCountFunction:
     Type: AWS::Serverless::Function
@@ -276,13 +274,6 @@ Resources:
             - Effect: Allow
               Action: states:StartExecution
               Resource: !Ref PublishStateMachine
-      Events:
-        EventInvocation:
-          Type: EventBridgeRule
-          Properties:
-            Pattern:
-              detail-type:
-                - Process New Blog
 
   BlogViewCountStateMachine:
     Type: AWS::Serverless::StateMachine

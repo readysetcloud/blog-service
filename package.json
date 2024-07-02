@@ -18,7 +18,10 @@
     "octokit": "^4.0.2"
   },
   "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.606.0",
     "@aws-sdk/client-eventbridge": "^3.583.0",
+    "@aws-sdk/client-sfn": "^3.606.0",
+    "@aws-sdk/util-dynamodb": "^3.606.0",
     "@eslint/js": "^9.4.0",
     "eslint": "^9.4.0",
     "globals": "^15.3.0"

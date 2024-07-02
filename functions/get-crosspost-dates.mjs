@@ -1,10 +1,27 @@
 export const handler = async (state) => {
-  const today = Date.now();
-  const dev = getRandomDateAfter(today);
-  const medium = getRandomDateAfter(dev);
-  const hashnode = getRandomDateAfter(medium);
+  let lastPublishDate = Date.now();
+  const crossPosts = {
+    dev: 'DO NOT PUBLUSH',
+    medium: 'DO NOT PUBLISH',
+    hashnode: 'DO NOT PUBLISH'
+  };
 
-  return { dev, medium, hashnode };
+  if (state.crossPostTo.includes('dev')) {
+    lastPublishDate = getRandomDateAfter(lastPublishDate);
+    crossPosts.dev = lastPublishDate;
+  }
+
+  if (state.crossPostTo.includes('medium')) {
+    lastPublishDate = getRandomDateAfter(lastPublishDate);
+    crossPosts.medium = lastPublishDate;
+  }
+
+  if (state.crossPostTo.includes('hashnode')) {
+    lastPublishDate = getRandomDateAfter(lastPublishDate);
+    crossPosts.hashnode = lastPublishDate;
+  }
+
+  return crossPosts;
 };
 
 const getRandomDateAfter = (inputDate) => {
