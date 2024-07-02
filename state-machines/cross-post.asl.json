@@ -221,6 +221,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
+                  "shouldPublish": "${ShouldPublish}",
                   "key.$": "$$.Execution.Input.key",
                   "fileName.$": "$$.Execution.Input.fileName",
                   "tenant.$": "$$.Execution.Input.tenant",
@@ -284,6 +285,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
+                  "shouldPublish": "${ShouldPublish}",
                   "key.$": "$$.Execution.Input.key",
                   "fileName.$": "$$.Execution.Input.fileName",
                   "tenant.$": "$$.Execution.Input.tenant",
@@ -344,6 +346,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
+                  "shouldPublish": "${ShouldPublish}",
                   "key.$": "$$.Execution.Input.key",
                   "fileName.$": "$$.Execution.Input.fileName",
                   "tenant.$": "$$.Execution.Input.tenant",

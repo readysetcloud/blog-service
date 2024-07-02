@@ -237,6 +237,9 @@ Resources:
           - get-crosspost-dates.mjs
     Properties:
       Handler: get-crosspost-dates.handler
+      Environment:
+        Variables:
+          DELAY_TYPE: !If [DeployProductionResources, 'delay', 'now']
 
   CrossPostStateMachine:
     Type: AWS::Serverless::StateMachine
@@ -254,6 +257,7 @@ Resources:
         GetBlogContent: !GetAtt GetBlogContentFunction.Arn
         StepFunctionsStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution
         PublishStateMachine: !Ref PublishStateMachine
+        ShouldPublish: !If [DeployProductionResources, true, false]
       Policies:
         - Version: 2012-10-17
           Statement:

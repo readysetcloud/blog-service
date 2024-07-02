@@ -179,7 +179,7 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Publish",
+      "Next": "Should Publish?",
       "Catch": [
         {
           "ErrorEquals": [
@@ -188,6 +188,17 @@
           "Next": "Update Record - Publisher Fail"
         }
       ]
+    },
+    "Should Publish?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$$.Execution.Input.shouldPublish",
+          "StringEquals": "true",
+          "Next": "Publish"
+        }
+      ],
+      "Default": "Success"
     },
     "Publish": {
       "Type": "Task",
