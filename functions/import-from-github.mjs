@@ -1,6 +1,6 @@
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import frontmatter from '@github-docs/frontmatter';
-import { getOctokit, getTenant } from './utils/helpers.mjs';
+import { getOctokit, getTenant, getFileContents } from './utils/helpers.mjs';
 
 const sfn = new SFNClient();
 let octokit;
