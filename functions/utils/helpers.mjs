@@ -1,4 +1,5 @@
 import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
+import { getParameter } from '@aws-lambda-powertools/parameters/ssm';
 import { Octokit } from 'octokit';
 import { CacheClient, Configurations, CredentialProvider } from '@gomomento/sdk';
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
