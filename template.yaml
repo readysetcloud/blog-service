@@ -241,6 +241,7 @@ Resources:
       Environment:
         Variables:
           DELAY_TYPE: !If [DeployProductionResources, 'delay', 'now']
+          SHOULD_PUBLISH: !If [DeployProductionResources, true, false]
 
   CrossPostStateMachine:
     Type: AWS::Serverless::StateMachine

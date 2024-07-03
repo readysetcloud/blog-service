@@ -6,6 +6,10 @@ export const handler = async (state) => {
     hashnode: 'DO NOT PUBLISH'
   };
 
+  if(process.env.SHOULD_PUBLISH !== 'true') {
+    return crossPosts;
+  }
+
   if (state.crossPostTo.includes('dev')) {
     lastPublishDate = getRandomDateAfter(lastPublishDate);
     crossPosts.dev = lastPublishDate;
