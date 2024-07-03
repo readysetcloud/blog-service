@@ -145,8 +145,7 @@
           ],
           "Next": "Update Record - Failure"
         }
-      ],
-      "OutputPath": "$.Payload"
+      ]
     },
     "Save Catalog Entry": {
       "Type": "Task",
