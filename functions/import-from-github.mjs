@@ -19,7 +19,6 @@ export const handler = async (event) => {
         email: tenant.email
       },
       key: `${tenant.pk}#${github.fileName}`,
-      commit: content.commit,
       content: data
     };
 
