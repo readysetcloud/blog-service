@@ -1,25 +1,53 @@
 export const handler = async (state) => {
-  const today = Date.now();
-  const dev = getRandomDateAfter(today);
-  const medium = getRandomDateAfter(dev);
-  const hashnode = getRandomDateAfter(medium);
+  let lastPublishDate = Date.now();
+  const crossPosts = {
+    dev: 'DO NOT PUBLUSH',
+    medium: 'DO NOT PUBLISH',
+    hashnode: 'DO NOT PUBLISH'
+  };
 
-  return { dev, medium, hashnode };
+  if(process.env.SHOULD_PUBLISH !== 'true') {
+    return crossPosts;
+  }
+
+  if (state.crossPostTo.includes('dev')) {
+    lastPublishDate = getRandomDateAfter(lastPublishDate);
+    crossPosts.dev = lastPublishDate;
+  }
+
+  if (state.crossPostTo.includes('medium')) {
+    lastPublishDate = getRandomDateAfter(lastPublishDate);
+    crossPosts.medium = lastPublishDate;
+  }
+
+  if (state.crossPostTo.includes('hashnode')) {
+    lastPublishDate = getRandomDateAfter(lastPublishDate);
+    crossPosts.hashnode = lastPublishDate;
+  }
+
+  return crossPosts;
 };
 
 const getRandomDateAfter = (inputDate) => {
   const date = new Date(inputDate);
 
-  const additionalDays = Math.floor(Math.random() * 3) + 3;
-  date.setDate(date.getDate() + additionalDays);
+  switch (process.env.DELAY_TYPE) {
+    case 'delay':
+      const additionalDays = Math.floor(Math.random() * 3) + 3;
+      date.setDate(date.getDate() + additionalDays);
 
-  // Ensure the date does not fall on a weekend
-  while (date.getDay() === 0 || date.getDay() === 6) {
-    date.setDate(date.getDate() + 1);
+      // Ensure the date does not fall on a weekend
+      while (date.getDay() === 0 || date.getDay() === 6) {
+        date.setDate(date.getDate() + 1);
+      }
+
+      const randomHour = Math.floor(Math.random() * 3) + 16;
+      date.setHours(randomHour, 0, 0, 0);
+      break;
+    default:
+      // all at once. Cross post now - which is the inputDate
+      break;
   }
-
-  const randomHour = Math.floor(Math.random() * 3) + 16;
-  date.setHours(randomHour, 0, 0, 0);
 
   return date.toISOString();
 };

@@ -40,7 +40,7 @@ jobs:
           sam build --parallel
 
           sam deploy \
-          --stack-name rsc-core \
+          --stack-name blog-service \
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \

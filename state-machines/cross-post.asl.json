@@ -9,7 +9,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "$$.Execution.Input.detail.key"
+            "S.$": "$$.Execution.Input.key"
           },
           "sk": {
             "S": "blog"
@@ -52,7 +52,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "$$.Execution.Input.detail.key"
+            "S.$": "$$.Execution.Input.key"
           },
           "sk": {
             "S": "blog"
@@ -75,8 +75,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.detail.futureDate",
-          "IsPresent": true,
+          "And": [
+            {
+              "Variable": "$.futureDate",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$$.Execution.Input.shouldPublish",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Wait For Future Date"
         }
       ],
@@ -84,7 +92,7 @@
     },
     "Wait For Future Date": {
       "Type": "Wait",
-      "TimestampPath": "$.detail.futureDate",
+      "TimestampPath": "$.futureDate",
       "Next": "Trigger Site Rebuild"
     },
     "Trigger Site Rebuild": {
@@ -106,13 +114,11 @@
     "Generate Crosspost Dates": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
-      "ResultSelector": {
-        "content.$": "$.Payload.content"
-      },
       "Parameters": {
         "FunctionName": "${GetCrosspostDates}",
         "Payload": {
-          "fileName.$": "$$.Execution.Input.detail.fileName"
+          "fileName.$": "$$.Execution.Input.fileName",
+          "crossPostTo.$": "$$.Execution.Input.crossPostTo"
         }
       },
       "Retry": [
@@ -146,16 +152,16 @@
         "TableName": "${TableName}",
         "Item": {
           "pk": {
-            "S.$": "$$.Execution.Input.detail.url"
+            "S.$": "$$.Execution.Input.url"
           },
           "sk": {
             "S": "blog"
           },
           "GSI1PK": {
-            "S.$": "States.Format('blog#{}', $$.Execution.Input.detail.author)"
+            "S.$": "States.Format('blog#{}', $$.Execution.Input.tenant.id)"
           },
           "GSI1SK": {
-            "S.$": "$$.Execution.Input.detail.fileName"
+            "S.$": "$$.Execution.Input.fileName"
           }
         }
       },
@@ -169,7 +175,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "$$.Execution.Input.detail.key"
+            "S.$": "$$.Execution.Input.key"
           },
           "sk": {
             "S": "blog"
@@ -192,8 +198,23 @@
       "Type": "Parallel",
       "Branches": [
         {
-          "StartAt": "Wait For Dev Crosspost Date",
+          "StartAt": "Crosspost to Dev?",
           "States": {
+            "Crosspost to Dev?": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.dev",
+                  "StringEquals": "DO NOT PUBLISH",
+                  "Next": "Skip Publish to Dev"
+                }
+              ],
+              "Default": "Wait For Dev Crosspost Date"
+            },
+            "Skip Publish to Dev": {
+              "Type": "Pass",
+              "End": true
+            },
             "Wait For Dev Crosspost Date": {
               "Type": "Wait",
               "Next": "Publish to Dev.to",
@@ -205,9 +226,11 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "key.$": "$$.Execution.Input.detail.key)",
-                  "fileName.$": "$$.Execution.Input.detail.fileName",
-                  "url.$": "$$.Execution.Input.detail.url",
+                  "shouldPublish.$": "$$.Execution.Input.shouldPublish",
+                  "key.$": "$$.Execution.Input.key",
+                  "fileName.$": "$$.Execution.Input.fileName",
+                  "tenant.$": "$$.Execution.Input.tenant",
+                  "url.$": "$$.Execution.Input.url",
                   "publisher": "dev",
                   "auth": {
                     "location": "header",
@@ -239,8 +262,23 @@
           }
         },
         {
-          "StartAt": "Wait For Medium Crosspost Date",
+          "StartAt": "Crosspost to Medium?",
           "States": {
+            "Crosspost to Medium?": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.medium",
+                  "StringEquals": "DO NOT PUBLISH",
+                  "Next": "Skip Publish to Medium"
+                }
+              ],
+              "Default": "Wait For Medium Crosspost Date"
+            },
+            "Skip Publish to Medium": {
+              "Type": "Pass",
+              "End": true
+            },
             "Wait For Medium Crosspost Date": {
               "Type": "Wait",
               "Next": "Publish to Medium",
@@ -252,9 +290,11 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "key.$": "$$.Execution.Input.detail.key",
-                  "fileName.$": "$$.Execution.Input.detail.fileName",
-                  "url.$": "$$.Execution.Input.detail.url",
+                  "shouldPublish.$": "$$.Execution.Input.shouldPublish",
+                  "key.$": "$$.Execution.Input.key",
+                  "fileName.$": "$$.Execution.Input.fileName",
+                  "tenant.$": "$$.Execution.Input.tenant",
+                  "url.$": "$$.Execution.Input.url",
                   "publisher": "medium",
                   "auth": {
                     "location": "query",
@@ -283,8 +323,23 @@
           }
         },
         {
-          "StartAt": "Wait For Hashnode Crosspost Date",
+          "StartAt": "Crosspost to Hashnode?",
           "States": {
+            "Crosspost to Hashnode?": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.hashnode",
+                  "StringEquals": "DO NOT PUBLISH",
+                  "Next": "Skip Publish to Hashnode"
+                }
+              ],
+              "Default": "Wait For Hashnode Crosspost Date"
+            },
+            "Skip Publish to Hashnode": {
+              "Type": "Pass",
+              "End": true
+            },
             "Wait For Hashnode Crosspost Date": {
               "Type": "Wait",
               "Next": "Publish to Hashnode",
@@ -296,9 +351,11 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "key.$": "$$.Execution.Input.detail.key",
-                  "fileName.$": "$$.Execution.Input.detail.fileName",
-                  "url.$": "$$.Execution.Input.detail.url",
+                  "shouldPublish.$": "$$.Execution.Input.shouldPublish",
+                  "key.$": "$$.Execution.Input.key",
+                  "fileName.$": "$$.Execution.Input.fileName",
+                  "tenant.$": "$$.Execution.Input.tenant",
+                  "url.$": "$$.Execution.Input.url",
                   "publisher": "hashnode",
                   "auth": {
                     "location": "header",
@@ -340,7 +397,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "$$.Execution.Input.detail.key"
+            "S.$": "$$.Execution.Input.key"
           },
           "sk": {
             "S": "blog"

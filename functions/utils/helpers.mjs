@@ -1,13 +1,26 @@
 import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
+import { getParameter } from '@aws-lambda-powertools/parameters/ssm';
 import { Octokit } from 'octokit';
 import { CacheClient, Configurations, CredentialProvider } from '@gomomento/sdk';
+import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { marshall, unmarshall} from '@aws-sdk/util-dynamodb';
 
 let octokit;
 let secrets;
+let tenants = {};
+const ddb = new DynamoDBClient();
 
-export const getOctokit = async () => {
+export const getOctokit = async (tenantId) => {
   if (!octokit) {
-    const auth = await getSecretValue('github');
+    let secrets;
+    if (tenantId) {
+      const tenant = await getTenant(tenantId);
+      secrets = await getParameter(tenant.apiKeyParameter, { decrypt: true, transform: 'json' });
+    } else {
+      secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
+    }
+
+    const auth = secrets.github;
     octokit = new Octokit({ auth });
   }
 
@@ -19,15 +32,16 @@ export const getSecretValue = async (key) => {
   return secrets[key];
 };
 
-export const getFileContents = async (fileName) => {
+export const getFileContents = async (tenantId, github) => {
   if(!octokit){
     await getOctokit();
   }
-  
+  const tenant = await getTenant(tenantId);
   const contents = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-    owner: process.env.OWNER,
-    repo: process.env.REPO,
-    path: fileName
+    owner: tenant.github.owner,
+    repo: tenant.github.repo,
+    path: github.fileName,
+    ...github.branchName && { ref: github.branchName }
   });
 
   const buffer = Buffer.from(contents.data.content, 'base64');
@@ -53,5 +67,28 @@ export const getCacheClient = async () => {
 const loadSecrets = async () => {
   if (!secrets) {
     secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
+  }
+};
+
+
+export const getTenant = async (tenantId) => {
+  if (tenants.tenantId) {
+    return tenants.tenantId;
+  } else {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: tenantId,
+        sk: 'tenant'
+      })
+    }));
+
+    if (!result.Item) {
+      throw new Error(`Tenant '${tenantId}' not found`);
+    }
+
+    const data = unmarshall(result.Item);
+    tenants.tenantId = data;
+    return data;
   }
 };
