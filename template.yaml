@@ -117,6 +117,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref BlogTable
           STATE_MACHINE_ARN: !Ref CrossPostStateMachine
+          SHOULD_PUBLISH: !If [DeployProductionResources, true, false]
       Events:
         EventInvocation:
           Type: EventBridgeRule
@@ -257,7 +258,6 @@ Resources:
         GetBlogContent: !GetAtt GetBlogContentFunction.Arn
         StepFunctionsStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution
         PublishStateMachine: !Ref PublishStateMachine
-        ShouldPublish: !If [DeployProductionResources, true, false]
       Policies:
         - Version: 2012-10-17
           Statement:

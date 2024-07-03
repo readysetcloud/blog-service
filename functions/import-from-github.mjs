@@ -43,7 +43,8 @@ const processNewBlog = async (data) => {
   }
   const crossPostTo = metadata.data.crosspost ?? [];
   data.crossPostTo = crossPostTo;
-  data.url = `/blog/${metadata.data.slug.substring(1)}`
+  data.url = `/blog/${metadata.data.slug.substring(1)}`;
+  data.shouldPublish = Boolean(process.env.SHOULD_PUBLISH);
 
   await sfn.send(new StartExecutionCommand({
     stateMachineArn: process.env.STATE_MACHINE_ARN,

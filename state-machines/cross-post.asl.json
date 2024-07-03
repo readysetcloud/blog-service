@@ -75,8 +75,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.futureDate",
-          "IsPresent": true,
+          "And": [
+            {
+              "Variable": "$.futureDate",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$$.Execution.Input.shouldPublish",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Wait For Future Date"
         }
       ],
@@ -221,7 +229,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "shouldPublish": "${ShouldPublish}",
+                  "shouldPublish.$": "$$.Execution.Input.shouldPublish",
                   "key.$": "$$.Execution.Input.key",
                   "fileName.$": "$$.Execution.Input.fileName",
                   "tenant.$": "$$.Execution.Input.tenant",
@@ -285,7 +293,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "shouldPublish": "${ShouldPublish}",
+                  "shouldPublish.$": "$$.Execution.Input.shouldPublish",
                   "key.$": "$$.Execution.Input.key",
                   "fileName.$": "$$.Execution.Input.fileName",
                   "tenant.$": "$$.Execution.Input.tenant",
@@ -346,7 +354,7 @@
               "Parameters": {
                 "StateMachineArn": "${PublishStateMachine}",
                 "Input": {
-                  "shouldPublish": "${ShouldPublish}",
+                  "shouldPublish.$": "$$.Execution.Input.shouldPublish",
                   "key.$": "$$.Execution.Input.key",
                   "fileName.$": "$$.Execution.Input.fileName",
                   "tenant.$": "$$.Execution.Input.tenant",
