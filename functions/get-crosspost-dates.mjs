@@ -1,7 +1,7 @@
 export const handler = async (state) => {
   let lastPublishDate = Date.now();
   const crossPosts = {
-    dev: 'DO NOT PUBLUSH',
+    dev: 'DO NOT PUBLISH',
     medium: 'DO NOT PUBLISH',
     hashnode: 'DO NOT PUBLISH'
   };
