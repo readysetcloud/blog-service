@@ -71,14 +71,15 @@
             "S": "blog"
           }
         },
-        "UpdateExpression": "SET #publisher.#status = :status",
+        "UpdateExpression": "SET #publisher = :publisher",
         "ExpressionAttributeNames": {
-          "#publisher.$": "$$.Execution.Input.publisher",
-          "#status": "status"
+          "#publisher.$": "$$.Execution.Input.publisher"
         },
         "ExpressionAttributeValues": {
-          ":status": {
-            "S": "in progress"
+          ":publisher": {
+            "M": {
+              "status": { "S": "in progress"}
+            }
           }
         }
       },
@@ -417,14 +418,15 @@
             "S": "blog"
           }
         },
-        "UpdateExpression": "SET #publisher.#status = :status",
+        "UpdateExpression": "SET #publisher = :publisher",
         "ExpressionAttributeNames": {
-          "#publisher.$": "$$.Execution.Input.publisher",
-          "#status": "status"
+          "#publisher.$": "$$.Execution.Input.publisher"
         },
         "ExpressionAttributeValues": {
-          ":status": {
-            "S": "failed"
+          ":publisher": {
+            "M": {
+              "status": { "S": "failed" }
+            }
           }
         }
       },

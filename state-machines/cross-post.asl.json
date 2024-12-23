@@ -58,14 +58,18 @@
             "S": "blog"
           }
         },
-        "UpdateExpression": "SET #status = :status",
+        "UpdateExpression": "SET #status = :status, #ids = :ids, #links = :links",
         "ExpressionAttributeNames": {
-          "#status": "status"
+          "#status": "status",
+          "#ids": "ids",
+          "#links": "links"
         },
         "ExpressionAttributeValues": {
           ":status": {
             "S": "in progress"
-          }
+          },
+          ":ids": { "M": {}},
+          ":links": { "M": {}}
         }
       },
       "Next": "Is Scheduled In The Future?",
