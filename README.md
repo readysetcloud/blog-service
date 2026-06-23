@@ -161,21 +161,96 @@ back to the shared `SECRET_ID` secret's `github` key.
 
 ---
 
-## Data flow & DynamoDB model
+## Data model
 
-Single table, keyed by `pk` / `sk`, with one GSI (`GSI1PK` / `GSI1SK`).
+A single DynamoDB table (`BlogTable`) holds every entity. It is keyed by `pk`
+(partition, `HASH`) / `sk` (sort, `RANGE`), both strings, with one global secondary
+index **`GSI1`** on `GSI1PK` / `GSI1SK` (also strings) projecting `ALL` attributes.
+Billing is `PAY_PER_REQUEST`. There is no `entityType` attribute — item kinds are
+distinguished implicitly by the *shape* of their keys (one of the things the
+[next-gen design](#next-generation-design--improvements) cleans up).
 
-| Item | pk | sk | Notes |
+### Entities
+
+#### 1. Tenant
+Owner of a blog and the credentials/config used to publish it.
+
+| Attribute | Type | Example | Notes |
 |---|---|---|---|
-| Tenant | `<tenantId>` | `tenant` | `apiKeyParameter`, `github.{owner,repo}`, `email`. |
-| Catalog entry | `<url>` (e.g. `/blog/my-slug`) | `blog` | `GSI1PK = blog#<tenantId>`, `GSI1SK = <fileName>`. Holds `ids` and `links` maps (per-platform id + URL). |
-| Idempotency record | `<tenant.pk>#<fileName>` | `blog` | `status` (`in progress`/`succeeded`/`failed`) plus per-publisher status maps. |
-| Weekly view count | `<articleUrl>` | `viewCount-<YYYY-MM-DD>` | `weekly` and `allTime` maps of `{ blog, medium, dev, hashnode, total }`. |
+| `pk` | S | `allen.helton` | The tenant id. |
+| `sk` | S | `tenant` | Constant. |
+| `email` | S | `me@example.com` | Attached to each blog payload; not (currently) the email recipient. |
+| `apiKeyParameter` | S | `/rsc/allen.helton/keys` | SSM SecureString path holding that tenant's secrets JSON. |
+| `github` | M | `{ owner, repo }` | Which repo to pull content from (legacy pull model). |
 
-The **catalog** serves a key purpose during reformatting: internal links between
-articles are rewritten to point at the *platform-native* copy of the linked article
-when one exists (e.g. a link to another RSC post becomes its Dev.to/Medium/Hashnode URL
-if known), otherwise it falls back to the absolute `readysetcloud.io` URL.
+> Read with `GetItem(pk=<tenantId>, sk=tenant)` (`getTenant` in `helpers.mjs`).
+
+#### 2. Catalog entry (article)
+The canonical record of a published article and where its copies live. This is the
+record consulted during reformatting so cross-links resolve to platform-native URLs.
+
+| Attribute | Type | Example | Notes |
+|---|---|---|---|
+| `pk` | S | `/blog/my-post` | The canonical site-relative URL (`/blog/<slug>`). |
+| `sk` | S | `blog` | Constant. |
+| `GSI1PK` | S | `blog#allen.helton` | `blog#<tenantId>` — used to list a tenant's catalog. |
+| `GSI1SK` | S | `posts/my-post.md` | The source `fileName`. |
+| `links` | M | `{ url, dev, medium, hashnode }` | `url` = canonical path; per-platform keys = native URL of the copy. Read in `parse-blog.mjs` as `links.M.<platform>.S`. |
+| `ids` | M | `{ dev, medium, hashnode }` | Per-platform post id of the copy. Used by the analytics job to fetch per-platform views. |
+
+> Created by **Save Catalog Entry** (cross-post), enriched per platform by **Update
+> Catalog** (publish), and queried via `GSI1` for link rewriting and analytics.
+
+#### 3. Idempotency record (per-article publish state)
+Guards against double-processing a blog and tracks per-platform progress. Note it shares
+`sk = blog` with the catalog entry but uses a different `pk` shape.
+
+| Attribute | Type | Example | Notes |
+|---|---|---|---|
+| `pk` | S | `allen.helton#posts/my-post.md` | `<tenantId>#<fileName>` (the `key`). |
+| `sk` | S | `blog` | Constant. |
+| `status` | S | `in progress` | Overall: `in progress` \| `succeeded` \| `failed`. |
+| `dev` / `medium` / `hashnode` | M | `{ status, url, id }` | Per-publisher result. `status` of `succeeded` short-circuits re-publish. |
+| `ids` / `links` | M | `{}` | Initialized empty when set to in progress. |
+
+> Read with `GetItem(pk=<tenantId>#<fileName>, sk=blog)`. The cross-post machine checks
+> `status`; the publish machine checks the per-publisher `status` via
+> `get-publisher-status.mjs`.
+
+#### 4. Weekly view count (analytics snapshot)
+One item per article per weekly run, capturing both the running total and the
+week-over-week delta.
+
+| Attribute | Type | Example | Notes |
+|---|---|---|---|
+| `pk` | S | `/blog/my-post` | The article URL (same as catalog `pk`). |
+| `sk` | S | `viewCount-2026-06-22` | `viewCount-<YYYY-MM-DD>` (execution start date). |
+| `weekly` | M | `{ blog, medium, dev, hashnode, total }` | Delta vs. the previous snapshot (all `N`). |
+| `allTime` | M | `{ blog, medium, dev, hashnode, total }` | Running totals at snapshot time (all `N`). |
+
+> Latest prior snapshot is fetched with `Query(pk=<url>, begins_with(sk,'viewCount'),
+> ScanIndexForward=false, Limit=1)`.
+
+### Access patterns
+
+| # | Need | Operation |
+|---|---|---|
+| 1 | Resolve tenant config/creds | `GetItem` `pk=<tenantId>`, `sk=tenant` |
+| 2 | Check/guard publish idempotency | `GetItem` `pk=<tenantId>#<fileName>`, `sk=blog` |
+| 3 | List a tenant's catalog (link rewriting) | `Query GSI1` `GSI1PK=blog#<tenantId>` |
+| 4 | List all articles for the weekly job | `Query GSI1` `GSI1PK=article` ⚠️ *see note* |
+| 5 | Get an article's last snapshot | `Query` `pk=<url>` + `begins_with(sk,'viewCount')`, desc, limit 1 |
+| 6 | Write/enrich catalog, idempotency, snapshots | `PutItem` / `UpdateItem` on the keys above |
+
+> ⚠️ **Inconsistency to be aware of:** access pattern #4 queries `GSI1PK = "article"`,
+> but the only writer of `GSI1PK` (Save Catalog Entry) writes `blog#<tenantId>`. In this
+> repo nothing writes `article`, so the weekly job's "Get All Blogs" returns nothing
+> unless the data was seeded elsewhere. The next-gen design fixes the GSI1 convention.
+
+The **catalog** is central to reformatting: internal links between articles are rewritten
+to point at the *platform-native* copy of the linked article when one exists (e.g. a link
+to another RSC post becomes its Dev.to/Medium/Hashnode URL), otherwise it falls back to
+the absolute `readysetcloud.io` URL.
 
 ---
 
@@ -374,6 +449,121 @@ To stand this behavior up in another repo:
    content pipeline, and the weekly analytics schedule.
 7. Keep the **secret JSON key names equal to the publisher names** (`dev`, `medium`,
    `hashnode`) so `SendApiRequest`'s `secretKey` lookup works.
+
+---
+
+## Next-generation design & improvements
+
+The sections above describe the **legacy** service as it exists today. This section is
+the spec for a **rebuild** that keeps the catalog + cross-post + analytics behavior but
+removes the parts that aged poorly. Treat it as the target for the new repo.
+
+### Confirmed design changes
+
+1. **Push-based ingestion (drop the GitHub "pull").**
+   The trigger event carries the **full Markdown + frontmatter** in its payload instead
+   of just a `fileName` to fetch. The service no longer reaches out to GitHub.
+   - **Removed:** Octokit, `import-from-github`, `get-blog-content`, the `github` secret,
+     and the `github-owner` / `github-repo` config.
+   - **New event shape:**
+     ```json
+     {
+       "detail-type": "Create New Blog",
+       "detail": {
+         "tenantId": "allen.helton",
+         "fileName": "posts/my-post.md",
+         "content": "---\ntitle: ...\n---\n# body markdown..."
+       }
+     }
+     ```
+   - **Why:** decouples the service from a specific source repo, makes every step
+     deterministically testable from a fixture, and kills a network dependency +
+     credential. The content producer (GitHub Action, CMS webhook, etc.) owns "where
+     content comes from"; this service just publishes what it's handed.
+
+2. **No shared/config Parameter Store, no Secrets Manager. Secrets become per-tenant
+   SecureString SSM parameters.**
+   - **Removed:** `/readysetcloud/secrets`, `/readysetcloud/admin-email`,
+     `/readysetcloud/send-api-request`, `/readysetcloud/github-*`, and the single shared
+     Secrets Manager secret.
+   - **Kept (the *only* remaining Parameter Store use):** one **SecureString** parameter
+     per tenant holding that tenant's platform tokens as JSON, e.g.
+     `/<service>/tenants/<tenantId>/credentials` →
+     `{ "dev": "...", "medium": "...", "medium-cookie": "...", "hashnode": "...", "ga": "..." }`.
+     The tenant record points at it via `credentialsParameter`.
+   - Other former-SSM values become plain **env vars / SAM parameters** (admin email,
+     publication ids, etc.).
+   - **Why:** per-tenant SecureString gives tenant-scoped IAM (`ssm:GetParameter` on
+     `/<service>/tenants/<tenantId>/*`) and independent rotation, with no global secret
+     blob and no second secrets product to manage.
+
+3. **Inline the HTTP call — delete `SendApiRequest`.**
+   The shared lambda was *literally a wrapper around `fetch`*. Replace it with one of:
+   - a **Step Functions HTTP Task** (EventBridge API Destinations) for the publish POST —
+     no Lambda at all; or
+   - a small inline `publish` Lambda that reads the tenant token, sets the header/query
+     credential, and `fetch`es — when per-tenant auth injection is easier in code.
+   Either way the cross-service SSM ARN indirection goes away. The auth/request/output
+   contract (header-vs-query, JSONPath extraction) stays the same — just inlined.
+
+4. **Remove Momento entirely.**
+   The weekly job used Momento sorted sets only to rank "top N" articles. Since every
+   weekly snapshot is already in DynamoDB, compute the ranking from there:
+   - keep writing `viewCount-<date>` snapshots (with `weekly` deltas);
+   - for the summary, `Query GSI1` for the latest snapshot per article (add a snapshot to
+     `GSI1` keyed `GSI1PK=viewCount#<date>`), sort the handful of rows in memory, take
+     the top 5 per source. Article volume is tiny — no cache needed.
+   - **Removed:** `@gomomento/sdk`, `getCacheClient`, and the arbitrary `chatgpt` /
+     `*counts` set names.
+
+### Data-model cleanups
+
+- **Add an explicit `entityType` (or `type`) attribute** to every item so kinds aren't
+  inferred from key *shape*. Today catalog entries and idempotency records both use
+  `sk = blog` and are told apart only by `pk` format.
+- **Fix the `GSI1` convention** so the weekly job actually finds articles. Pick one
+  scheme and use it for both reads and writes — e.g. `GSI1PK = article#<tenantId>` for
+  catalog entries, and have "Get All Blogs" query that (or fan out per tenant). The
+  current `GSI1PK="article"` read matches nothing that gets written.
+- **One idempotency key scheme.** Use entity-prefixed keys (e.g. `pk=ARTICLE#<url>`,
+  `pk=IDEMPOTENCY#<tenant>#<file>`, `pk=TENANT#<id>`) so partitions are self-describing.
+- **Seed `links.url` (the canonical URL) explicitly** when the catalog entry is created.
+  `parse-blog` reads `links.M.url.S`, but no step writes it today.
+
+### Latent bugs in the legacy code to fix in the rewrite
+
+These were found while documenting the service; carry fixes into the new implementation:
+
+- `publish.asl.json` → **Update Record- Success** sets the catalog `id` from
+  `$.publisher.output.url` (copy/paste — should be `.id`).
+- `publish.asl.json` → **Update Catalog** writes `links.<publisher> = $.publisher.output.link`,
+  but `get-publisher-output.mjs` only returns `url` and `id` — `link` is never produced,
+  so the link write resolves to null.
+- `get-blog-content.mjs` references an undefined `data` (`frontmatter(data)`) when
+  `includeMetadata` is true; it should be `frontmatter(content)`. (Moot once ingestion is
+  push-based, but the metadata-parse logic moves with it.)
+- `helpers.mjs` → `getTenant` caches with the literal key `tenants.tenantId` (not
+  `tenants[tenantId]`), and `getOctokit` caches one client globally — both leak the first
+  tenant's data/credentials to later tenants. (Caching moot once pull is gone, but apply
+  the same care to the per-tenant *secret* cache.)
+- `get-view-count.mjs` → `getHashnodeData` shadows `hashnodeArticles` with an inner
+  `const`, so `cachedHashnodeArticles` is set to the empty outer array and the cache never
+  warms.
+
+### Operational improvements worth adding
+
+- **Tests.** `npm test` currently just errors. The reformat (`parse-blog`), output
+  extraction (`get-publisher-output`), and crosspost-date logic are pure and easy to unit
+  test — add fixtures per platform.
+- **Frontmatter validation at ingestion** (title/slug/date/tags present and well-typed)
+  so a bad post fails fast with a clear message instead of mid-publish.
+- **DLQs + alarms** on the analytics `Map` and the cross-post `Parallel` branches, and a
+  failure alarm on each state machine, so a silent per-platform failure is visible.
+- **Structured logging + tracing** (the legacy `console.error`s swallow context); keep
+  X-Ray on.
+- **Least-privilege IAM per tenant path** for the SecureString reads.
+- **Idempotent platform publishes** where the API supports it (Dev.to/Hashnode), so a
+  retry doesn't create duplicate posts.
 
 ---
 
