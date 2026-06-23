@@ -370,10 +370,101 @@ and the payloads `ParseBlog` produces. Reproduce these precisely.
 - **Output:** slug at `$.result.Payload.data.publishPost.post.slug`; the public URL is
   composed as `https://allenheltondev.hashnode.dev/<slug>`.
 
-> **Link & tweet rewriting (all platforms):** `ParseBlog` finds Markdown links
-> `(...)` and Hugo tweet shortcodes `{{<tweet user="x" id="123">}}`. Links matching a
-> catalogued article are swapped for that platform's native URL (or the absolute RSC
-> URL). Tweet shortcodes become each platform's embed/URL form.
+### Content reformatting spec (`parse-blog.mjs`)
+
+This is the exact behavior an implementation must reproduce. `ParseBlog` receives
+`{ post, catalog, format }` where `post` is the raw Markdown (frontmatter + body),
+`catalog` is the tenant's catalog items (DynamoDB-marshalled), and `format` is the
+publisher name. It returns `{ payload, url }`.
+
+**Step 0 — split frontmatter.** Parse with `@github-docs/frontmatter`, giving
+`data` (the frontmatter object) and `content` (the body Markdown).
+
+**Step 1 — extract links and tweets** from the *body* with these exact regexes:
+
+```js
+// every markdown link target, i.e. the text inside (...)
+const links  = content.matchAll(/\(([^\)]*)\)/g);
+// Hugo tweet shortcodes: {{<tweet user="handle" id="123">}}
+const tweets = content.matchAll(/\{\{<tweet user="([a-zA-Z0-9]*)" id="([\d]*)">\}\}/g);
+// tweet URL built from the capture groups:
+const tweetUrl = `https://twitter.com/${tweet[1]}/status/${tweet[2]}`;
+```
+
+`link[1]` is the captured URL (the bit inside the parens). `tweet[0]` is the whole
+shortcode match; `tweet[1]`/`tweet[2]` are the handle/id.
+
+**Step 2 — build the per-platform body** (differences are the important part):
+
+| | Dev.to | Medium | Hashnode |
+|---|---|---|---|
+| Base content | body as-is | **prepended header block** (see below) | body as-is |
+| Heading rule | — | every `\n\n## ` → `\n\n---\n\n## ` (insert an `---` divider before each H2) | — |
+| Tweet replacement | `tweet[0]` → `` `{% twitter <tweetUrl> %}` `` | `tweet[0]` → `<tweetUrl>` (bare URL) | `tweet[0]` → `` `%[<tweetUrl>]` `` |
+| Link self-host fallback base | `process.env.BLOG_BASE_URL` | `process.env.BLOG_BASE_URL` | hard-coded `https://readysetcloud.io` |
+
+Medium's prepended header block (note the literal `#`, `####`, and image markdown):
+
+```js
+let mediumContent =
+  `\n# ${data.title}\n` +
+  `#### ${data.description}\n` +
+  `![${data.image_attribution ?? ''}](${data.image})\n` +
+  `${content}`;
+mediumContent = mediumContent.replace(/\n\n## /g, '\n\n---\n\n## ');
+```
+
+**Step 3 — rewrite cross-links to stay on-platform.** For each extracted `link`, look
+for a catalog entry whose canonical URL matches the link target:
+
+```js
+const replacement = catalog.find(c => c.links.M.url.S == link[1]);
+```
+
+If found, replace `link[1]` in the content with, in priority order:
+1. the linked article's **native URL on the current platform** —
+   `replacement.links.M.<platform>.S` (`dev` / `medium` / `hashnode`); else
+2. the **absolute canonical URL** — `<base><replacement.links.M.url.S>`, where `<base>`
+   is `BLOG_BASE_URL` for Dev.to/Medium and the literal `https://readysetcloud.io` for
+   Hashnode.
+
+So a link to *another of your posts* points readers at the copy on the platform they're
+already reading, and falls back to the main site only when no native copy is catalogued.
+(Replacement uses `String.replace`, i.e. **first occurrence only** per match — a known
+sharp edge if the same URL appears twice; see improvements.)
+
+**Step 4 — assemble tags.** `tags = [...data.categories, ...data.tags]`. Dev.to and
+Hashnode strip spaces from each tag (`'Serverless Patterns'` → `'ServerlessPatterns'`);
+Hashnode emits `{ slug, name }` objects with the stripped value for both. Medium passes
+categories/tags through unchanged.
+
+**Step 5 — canonical URL / return.** Canonical URL is
+`https://readysetcloud.io/blog/${data.slug.substring(1)}` (the leading char of `slug` is
+dropped). The function returns `{ payload, url: '/blog/' + data.slug.substring(1) }`.
+
+**Worked example.** Body fragment:
+
+```markdown
+I wrote about [idempotency](/blog/idempotency-in-step-functions) before.
+{{<tweet user="allenheltondev" id="1700000000000000000">}}
+```
+
+…with a catalog entry whose `links.url = /blog/idempotency-in-step-functions` and
+`links.dev = https://dev.to/allenheltondev/idempotency-abc` produces, **for Dev.to**:
+
+```markdown
+I wrote about [idempotency](https://dev.to/allenheltondev/idempotency-abc) before.
+{% twitter https://twitter.com/allenheltondev/status/1700000000000000000 %}
+```
+
+For **Hashnode** the same link (no `links.hashnode` present) falls back to
+`https://readysetcloud.io/blog/idempotency-in-step-functions`, and the tweet becomes
+`%[https://twitter.com/allenheltondev/status/1700000000000000000]`.
+
+> **Improvements for the rewrite (carry into the rebuild):** the link regex matches the
+> inside of *any* `(...)`, not just Markdown links, so it can touch parenthetical prose;
+> and `String.replace` only swaps the first occurrence. Prefer a real Markdown AST
+> (e.g. `remark`) to rewrite only true link nodes, and handle repeated targets.
 
 ### Re-implementing `SendApiRequest`
 
