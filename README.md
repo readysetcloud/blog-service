@@ -13,6 +13,22 @@ come from.
 
 ---
 
+## Objective
+
+In the author's words:
+
+> A service to track all my blog posts, automatically cross-post them to various
+> publications, and update the cross-links between articles so they stay on-platform.
+
+Concretely, that means: keep one **catalog** of every article I write, **publish** each
+new post out to the other communities I'm active on (Dev.to, Medium, Hashnode) without me
+doing it by hand, and — when one article links to another of mine — **rewrite that link**
+to the reader's *current* platform (a Dev.to copy links to the Dev.to copy, Medium to
+Medium, etc.) instead of always bouncing them back to the main site. Tracking weekly
+view counts across all of those platforms came along for the ride.
+
+---
+
 ## What it does (at a glance)
 
 1. **Ingest** – When a new blog post is committed to the source content repo, an
