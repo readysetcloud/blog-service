@@ -2,34 +2,46 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://readysetcloud.io/schemas/blog-export.schema.json",
   "title": "Blog export",
-  "description": "Output of scripts/export-blogs.mjs: the entire BlogTable reassembled into clean, import-ready blog objects. There is no publish date in the source table; publishDate is not present. See analytics.history[].date for weekly analytics run dates (Mondays), which are a rough lower-bound proxy for when a post existed.",
+  "description": "Output of scripts/export-blogs.mjs: DynamoDB blog tables reassembled into clean, import-ready blog objects. May aggregate multiple table runs (append mode) — see `sources`. There is no publish date in the source tables; publishDate is not present. See analytics.history[].date for weekly analytics run dates (Mondays), a rough lower-bound proxy for when a post existed.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["exportedAt", "source", "counts", "tenants", "blogs"],
+  "required": ["exportedAt", "sources", "counts", "totals", "tenants", "blogs"],
   "properties": {
     "exportedAt": {
       "type": "string",
       "format": "date-time",
-      "description": "ISO-8601 timestamp of when the export ran."
+      "description": "ISO-8601 timestamp of the most recent export run merged into this file."
     },
-    "source": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["table", "region"],
-      "properties": {
-        "table": { "type": "string", "description": "DynamoDB table that was scanned." },
-        "region": { "type": ["string", "null"], "description": "AWS region, or null if resolved from the ambient config." }
+    "sources": {
+      "type": "array",
+      "description": "One entry per export run merged into this file (append mode). Blogs are deduped by url across runs.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["table", "region", "exportedAt"],
+        "properties": {
+          "table": { "type": "string", "description": "DynamoDB table that was scanned." },
+          "region": { "type": ["string", "null"], "description": "AWS region, or null if resolved from the ambient config." },
+          "exportedAt": { "type": "string", "format": "date-time" },
+          "itemsScanned": { "type": ["integer", "null"], "minimum": 0, "description": "Raw table items read during this run." },
+          "blogs": { "type": ["integer", "null"], "minimum": 0, "description": "Blog objects added/updated by this run." }
+        }
       }
     },
     "counts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["blogs", "tenants", "itemsScanned"],
+      "required": ["blogs", "tenants"],
       "properties": {
-        "blogs": { "type": "integer", "minimum": 0 },
-        "tenants": { "type": "integer", "minimum": 0 },
-        "itemsScanned": { "type": "integer", "minimum": 0, "description": "Total raw table items read during the scan." }
+        "blogs": { "type": "integer", "minimum": 0, "description": "Total blog objects in this file (across all merged runs)." },
+        "tenants": { "type": "integer", "minimum": 0 }
       }
+    },
+    "totals": {
+      "description": "Consolidated cumulative views summed across every exported blog (from each blog's authoritative latest allTime). `total` is the single grand-total value.",
+      "allOf": [{ "$ref": "#/$defs/viewCounts" }],
+      "type": "object",
+      "required": ["blog", "dev", "medium", "hashnode", "total"]
     },
     "tenants": {
       "type": "array",
@@ -68,8 +80,12 @@
       "required": ["url", "canonicalUrl", "tenantId", "fileName", "links", "ids", "publish", "analytics"],
       "properties": {
         "slug": {
-          "type": "string",
-          "description": "Article slug (url with the leading '/blog/' stripped). Omitted only if the catalog pk was not a string."
+          "type": ["string", "null"],
+          "description": "Article slug (the pk with the leading '/blog/' and any '<tenant>/' segment stripped). Null if it couldn't be derived."
+        },
+        "title": {
+          "type": ["string", "null"],
+          "description": "Article title when available (legacy catalog entries carry it; current-service entries do not). Null when unknown."
         },
         "url": {
           "type": "string",
@@ -132,8 +148,12 @@
         "analytics": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["latest", "history"],
+          "required": ["totals", "latest", "history"],
           "properties": {
+            "totals": {
+              "description": "Consolidated cumulative views for this article, from the latest snapshot's authoritative allTime. `total` is the single per-blog value. Null when the article has no snapshots.",
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/viewCounts" }]
+            },
             "latest": {
               "description": "Most recent weekly snapshot, or null if none.",
               "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/snapshot" }]
