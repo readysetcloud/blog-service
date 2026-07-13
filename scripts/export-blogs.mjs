@@ -205,6 +205,22 @@ const normalizePublisher = (m) => {
 const fileNameFromIdempotencyPk = (pk) =>
   (typeof pk === 'string' && pk.includes('#')) ? pk.slice(pk.indexOf('#') + 1) : undefined;
 
+// Consolidate per-platform crosspost info (native URL + post id + publish
+// status) from the three places it can live: the catalog `links` (the complete,
+// authoritative source of URLs), `ids`, and the publish/idempotency record
+// (sparser, used only as a fallback). A platform appears only if it has data.
+const buildCrossposts = (links, ids, publish) => {
+  const out = {};
+  for (const p of PLATFORMS) {
+    const pub = publish && publish[p];
+    const url = (links && links[p]) ?? (pub && pub.url) ?? null;
+    const id = (ids && ids[p]) ?? (pub && pub.id) ?? null;
+    const status = (pub && pub.status) ?? null;
+    if (url !== null || id !== null || status !== null) out[p] = { url, id, status };
+  }
+  return out;
+};
+
 // Consolidate a snapshot's cumulative "allTime" map into clean per-platform
 // totals plus a combined total. allTime is authoritative (the analytics job
 // maintained it as a running total); re-summing weekly deltas would drift.
@@ -337,6 +353,8 @@ const buildBlogs = (items) => {
     if (viewCountsByUrl.has(entry.pk)) usedViewCounts.add(entry.pk);
 
     const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
+    const links = normalizeLinks(entry.links);
+    const ids = normalizeIds(entry.ids);
 
     return {
       slug: slug ?? null,
@@ -347,9 +365,12 @@ const buildBlogs = (items) => {
       fileName: fileName ?? null,
       // Native URLs of each cross-posted copy (+ the canonical "url" key),
       // normalized from either key convention.
-      links: normalizeLinks(entry.links),
+      links,
       // Per-platform post ids used by the analytics job, normalized.
-      ids: normalizeIds(entry.ids),
+      ids,
+      // Consolidated per-platform crosspost record — the import-friendly view of
+      // where this article was cross-posted (url + id + publish status).
+      crossposts: buildCrossposts(links, ids, publish),
       publish,
       analytics: {
         // Consolidated cumulative views for this article (from the latest

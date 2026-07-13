@@ -77,7 +77,7 @@
     "blog": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "canonicalUrl", "tenantId", "fileName", "links", "ids", "publish", "analytics"],
+      "required": ["url", "canonicalUrl", "tenantId", "fileName", "links", "ids", "crossposts", "publish", "analytics"],
       "properties": {
         "slug": {
           "type": ["string", "null"],
@@ -124,6 +124,16 @@
           },
           "additionalProperties": { "type": "string" }
         },
+        "crossposts": {
+          "type": "object",
+          "description": "Consolidated per-platform crosspost record — where this article was cross-posted, with the native URL, post id, and publish status. The import-friendly, authoritative view (url comes from the complete `links` map, falling back to the publish record). A platform key is present only if the article was cross-posted there; an empty object means no crossposts.",
+          "properties": {
+            "dev": { "$ref": "#/$defs/crosspost" },
+            "medium": { "$ref": "#/$defs/crosspost" },
+            "hashnode": { "$ref": "#/$defs/crosspost" }
+          },
+          "additionalProperties": { "$ref": "#/$defs/crosspost" }
+        },
         "publish": {
           "description": "Publish state from the idempotency record (pk='<tenantId>#<fileName>'). Null when no idempotency record joined to this catalog entry.",
           "oneOf": [
@@ -164,6 +174,21 @@
               "items": { "$ref": "#/$defs/snapshot" }
             }
           }
+        }
+      }
+    },
+    "crosspost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "id", "status"],
+      "description": "Native URL, post id, and publish status of one cross-posted copy.",
+      "properties": {
+        "url": { "type": ["string", "null"], "description": "Native URL of the cross-posted copy on this platform." },
+        "id": { "type": ["string", "null"], "description": "Platform post id of the copy." },
+        "status": {
+          "type": ["string", "null"],
+          "enum": ["in progress", "succeeded", "failed", null],
+          "description": "Publish status from the idempotency record, or null if it wasn't tracked."
         }
       }
     },
