@@ -21,8 +21,11 @@
  *   - its idempotency record (per-platform publish status), either via the
  *     reconstructed <tenant>#<fileName> key (current) or via the record's `url`
  *     attribute pointing back at the catalog pk (legacy).
- *   - all of its weekly view-count snapshots, which share the catalog pk.
- * Output field names are normalized to one shape regardless of source table.
+ *   - its weekly view-count snapshots (shared catalog pk), consolidated into a
+ *     single cumulative analytics.totals; individual snapshots are not emitted.
+ * Each blog is normalized to one shape: canonicalUrl (sole identity), tenantId
+ * (allen.helton -> readysetcloud), title, a consolidated `crossposts` map
+ * (url/id/status per platform), `publish`, and `analytics.totals`.
  *
  * Usage:
  *   node scripts/export-blogs.mjs --table BlogTable-abc123 [options]
@@ -33,7 +36,7 @@
  * review file so nothing malformed silently lands in the import.
  *
  * Append / multiple runs: if the --out file already exists, this run is MERGED
- * into it (blogs deduped by url, last write wins; tenants deduped by pk; a per-run
+ * into it (blogs deduped by canonicalUrl, last write wins; tenants deduped by pk; a per-run
  * entry appended to `sources`; totals/counts recomputed). Re-running the same
  * table is therefore idempotent, and running several tables into the same --out
  * accumulates them. Pass --overwrite to start a fresh file instead.
@@ -143,6 +146,10 @@ const idempotencyKey = (tenantId, fileName) => `${tenantId}#${fileName}`;
 // literal "article" and carries no tenant, so this returns undefined there.
 const tenantIdFromGsi = (gsi1pk) =>
   (typeof gsi1pk === 'string' && gsi1pk.startsWith('blog#')) ? gsi1pk.slice('blog#'.length) : undefined;
+
+// The legacy data uses "allen.helton" as the tenant id; the current service
+// uses "readysetcloud". Normalize the former to the latter on output.
+const mapTenant = (id) => (id === 'allen.helton' ? 'readysetcloud' : id);
 
 // Derive tenantId + slug from the catalog entry. Prefers the GSI ("blog#<t>");
 // falls back to the legacy pk shape "/blog/<tenant>/<slug>".
@@ -353,21 +360,17 @@ const buildBlogs = (items) => {
     if (viewCountsByUrl.has(entry.pk)) usedViewCounts.add(entry.pk);
 
     const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
+    // links/ids are used to build crossposts but are not emitted themselves —
+    // crossposts already incorporates both.
     const links = normalizeLinks(entry.links);
     const ids = normalizeIds(entry.ids);
 
     return {
       slug: slug ?? null,
       title: title ?? null,
-      url: entry.pk,
+      // canonicalUrl is the sole article identity (used as the merge/sort key).
       canonicalUrl: typeof entry.pk === 'string' ? `https://readysetcloud.io${entry.pk}` : null,
-      tenantId: tenantId ?? null,
-      fileName: fileName ?? null,
-      // Native URLs of each cross-posted copy (+ the canonical "url" key),
-      // normalized from either key convention.
-      links,
-      // Per-platform post ids used by the analytics job, normalized.
-      ids,
+      tenantId: mapTenant(tenantId) ?? null,
       // Consolidated per-platform crosspost record — the import-friendly view of
       // where this article was cross-posted (url + id + publish status).
       crossposts: buildCrossposts(links, ids, publish),
@@ -375,17 +378,16 @@ const buildBlogs = (items) => {
       analytics: {
         // Consolidated cumulative views for this article (from the latest
         // snapshot's authoritative allTime). `.total` is the single number.
-        totals: buildTotals(latest && latest.allTime),
-        latest,
-        history: snapshots
+        totals: buildTotals(latest && latest.allTime)
       }
     };
   });
 
   if (args.tenant) {
-    blogs = blogs.filter((b) => b.tenantId === args.tenant);
+    const wanted = mapTenant(args.tenant);
+    blogs = blogs.filter((b) => b.tenantId === wanted);
   }
-  blogs.sort((a, b) => String(a.url).localeCompare(String(b.url)));
+  blogs.sort((a, b) => String(a.canonicalUrl).localeCompare(String(b.canonicalUrl)));
 
   // Grand total across every exported blog — the consolidated "across the board" value.
   const totals = sumTotals(blogs.map((b) => b.analytics.totals));
@@ -449,9 +451,8 @@ const validateBlogs = (blogs, validateBlog) => {
       valid.push(blog);
     } else {
       review.push({
-        url: blog.url ?? null,
+        canonicalUrl: blog.canonicalUrl ?? null,
         tenantId: blog.tenantId ?? null,
-        fileName: blog.fileName ?? null,
         // ajv reuses .errors across calls — capture it now, before the next blog.
         errors: (validateBlog.errors ?? []).map((e) => ({
           path: e.dataPath || '(root)',
@@ -498,13 +499,13 @@ const priorExport = (obj) => {
 const mergeExport = (prior, run) => {
   const base = priorExport(prior);
   const blogsByUrl = new Map();
-  for (const b of base.blogs) blogsByUrl.set(b.url, b);
-  for (const b of run.blogs) blogsByUrl.set(b.url, b); // last write wins → idempotent re-run
+  for (const b of base.blogs) blogsByUrl.set(b.canonicalUrl, b);
+  for (const b of run.blogs) blogsByUrl.set(b.canonicalUrl, b); // last write wins → idempotent re-run
   const tenantsByPk = new Map();
   for (const t of base.tenants) tenantsByPk.set(t.pk, t);
   for (const t of run.tenants) tenantsByPk.set(t.pk, t);
 
-  const blogs = [...blogsByUrl.values()].sort((a, b) => String(a.url).localeCompare(String(b.url)));
+  const blogs = [...blogsByUrl.values()].sort((a, b) => String(a.canonicalUrl).localeCompare(String(b.canonicalUrl)));
   const tenants = [...tenantsByPk.values()];
   return {
     exportedAt: run.exportedAt,
@@ -517,13 +518,13 @@ const mergeExport = (prior, run) => {
 };
 
 // Review items that are still failing across all runs: prior + this run, deduped
-// by url, minus any url that now appears in the export (i.e. became valid).
+// by canonicalUrl, minus any that now appears in the export (i.e. became valid).
 const mergeReview = (priorReview, runItems, exportedUrls) => {
   const byUrl = new Map();
   const prev = priorReview && Array.isArray(priorReview.items) ? priorReview.items : [];
-  for (const it of prev) byUrl.set(it.url, it);
-  for (const it of runItems) byUrl.set(it.url, it);
-  return [...byUrl.values()].filter((it) => !exportedUrls.has(it.url));
+  for (const it of prev) byUrl.set(it.canonicalUrl, it);
+  for (const it of runItems) byUrl.set(it.canonicalUrl, it);
+  return [...byUrl.values()].filter((it) => !exportedUrls.has(it.canonicalUrl));
 };
 
 // ---------------------------------------------------------------------------
@@ -572,7 +573,7 @@ const main = async () => {
   console.error(`Consolidated views (all blogs in file): ${output.totals.total.toLocaleString('en-US')} — ${JSON.stringify(output.totals)}`);
 
   // Review: keep the set of blogs still failing validation across all runs.
-  const exportedUrls = new Set(output.blogs.map((b) => b.url));
+  const exportedUrls = new Set(output.blogs.map((b) => b.canonicalUrl));
   const priorReview = args.overwrite ? null : readEnvelope(reviewPath, '--review');
   const reviewItems = mergeReview(priorReview, review, exportedUrls);
   if (reviewItems.length) {

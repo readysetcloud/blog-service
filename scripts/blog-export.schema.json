@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://readysetcloud.io/schemas/blog-export.schema.json",
   "title": "Blog export",
-  "description": "Output of scripts/export-blogs.mjs: DynamoDB blog tables reassembled into clean, import-ready blog objects. May aggregate multiple table runs (append mode) — see `sources`. There is no publish date in the source tables; publishDate is not present. See analytics.history[].date for weekly analytics run dates (Mondays), a rough lower-bound proxy for when a post existed.",
+  "description": "Output of scripts/export-blogs.mjs: DynamoDB blog tables reassembled into clean, import-ready blog objects. May aggregate multiple table runs (append mode) — see `sources`. Weekly view-count snapshots are consolidated into a single cumulative analytics.totals per article (individual snapshots are not emitted). There is no publish date in the source tables.",
   "type": "object",
   "additionalProperties": false,
   "required": ["exportedAt", "sources", "counts", "totals", "tenants", "blogs"],
@@ -77,7 +77,7 @@
     "blog": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "canonicalUrl", "tenantId", "fileName", "links", "ids", "crossposts", "publish", "analytics"],
+      "required": ["canonicalUrl", "tenantId", "crossposts", "publish", "analytics"],
       "properties": {
         "slug": {
           "type": ["string", "null"],
@@ -87,42 +87,13 @@
           "type": ["string", "null"],
           "description": "Article title when available (legacy catalog entries carry it; current-service entries do not). Null when unknown."
         },
-        "url": {
-          "type": "string",
-          "description": "Canonical site-relative URL and the catalog partition key, e.g. '/blog/my-post'."
-        },
         "canonicalUrl": {
           "type": ["string", "null"],
-          "description": "Absolute canonical URL (https://readysetcloud.io/blog/<slug>), or null when no slug could be derived."
+          "description": "Absolute canonical URL (https://readysetcloud.io<pk>). The sole article identity and the key used to dedupe across merged runs. Null only if the pk was not a string."
         },
         "tenantId": {
           "type": ["string", "null"],
-          "description": "Derived from the catalog GSI1PK ('blog#<tenantId>'). Null if GSI1PK was missing/malformed."
-        },
-        "fileName": {
-          "type": ["string", "null"],
-          "description": "Source markdown path, from the catalog GSI1SK, e.g. 'posts/my-post.md'."
-        },
-        "links": {
-          "description": "Native URLs of each cross-posted copy plus the canonical 'url'. Null if the catalog entry had no links map. Absent per-platform keys mean that copy was never published/recorded.",
-          "type": ["object", "null"],
-          "properties": {
-            "url": { "type": "string" },
-            "dev": { "type": "string" },
-            "medium": { "type": "string" },
-            "hashnode": { "type": "string" }
-          },
-          "additionalProperties": { "type": "string" }
-        },
-        "ids": {
-          "description": "Per-platform post id of each copy (used by the analytics job). Null if absent.",
-          "type": ["object", "null"],
-          "properties": {
-            "dev": { "type": "string" },
-            "medium": { "type": "string" },
-            "hashnode": { "type": "string" }
-          },
-          "additionalProperties": { "type": "string" }
+          "description": "Tenant that owns the article. Derived from GSI1PK ('blog#<tenantId>') or the pk path; the legacy 'allen.helton' is normalized to 'readysetcloud'."
         },
         "crossposts": {
           "type": "object",
@@ -158,20 +129,11 @@
         "analytics": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["totals", "latest", "history"],
+          "required": ["totals"],
           "properties": {
             "totals": {
               "description": "Consolidated cumulative views for this article, from the latest snapshot's authoritative allTime. `total` is the single per-blog value. Null when the article has no snapshots.",
               "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/viewCounts" }]
-            },
-            "latest": {
-              "description": "Most recent weekly snapshot, or null if none.",
-              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/snapshot" }]
-            },
-            "history": {
-              "type": "array",
-              "description": "All weekly snapshots for this article, sorted ascending by date.",
-              "items": { "$ref": "#/$defs/snapshot" }
             }
           }
         }
@@ -206,26 +168,6 @@
           "additionalProperties": true
         }
       ]
-    },
-    "snapshot": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["date", "weekly", "allTime"],
-      "description": "One weekly analytics snapshot. 'date' is the analytics run date (a Monday), NOT the article's publish date.",
-      "properties": {
-        "date": {
-          "type": "string",
-          "description": "YYYY-MM-DD, from the snapshot sort key 'viewCount-<date>'."
-        },
-        "weekly": {
-          "description": "Week-over-week deltas per source. Null if absent on the item.",
-          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/viewCounts" }]
-        },
-        "allTime": {
-          "description": "Running totals per source at snapshot time. Null if absent on the item.",
-          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/viewCounts" }]
-        }
-      }
     },
     "viewCounts": {
       "type": "object",
